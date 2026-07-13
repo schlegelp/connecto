@@ -1,0 +1,84 @@
+/* Site-wide tweaks. */
+
+:root {
+  --md-code-hl-number-color: #e05252;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 258;
+}
+
+/* --------------------------------------------------------- capability tables */
+
+/* The capability matrix is the densest table on the site, and its whole job is to
+   be scanned. Give the yes/no glyphs a colour so the shape of a row reads at a
+   glance, and stop the neuron-ID columns from wrapping mid-number. */
+.md-typeset .cn-caps td,
+.md-typeset .cn-caps th {
+  padding: 0.3rem 0.5rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.md-typeset .cn-caps td:first-child,
+.md-typeset .cn-caps th:first-child {
+  text-align: left;
+  font-weight: 600;
+}
+
+.md-typeset .cn-yes {
+  color: #22a06b;
+  font-weight: 700;
+}
+
+.md-typeset .cn-no {
+  color: var(--md-default-fg-color--lighter);
+}
+
+/* ------------------------------------------------------------- API reference */
+
+.md-typeset .doc-symbol-method,
+.md-typeset .doc-symbol-attribute,
+.md-typeset .doc-symbol-class {
+  font-size: 0.6rem;
+}
+
+.md-typeset .doc-heading {
+  scroll-margin-top: 3.6rem;
+}
+
+/* mkdocstrings emits one <h2> per object; without a rule the page reads as an
+   undifferentiated wall. */
+.md-typeset .doc-class > .doc-heading,
+.md-typeset .doc-function > .doc-heading {
+  padding-top: 0.6rem;
+  border-top: 0.05rem solid var(--md-default-fg-color--lightest);
+}
+
+.md-typeset .doc-contents {
+  padding-left: 0.6rem;
+  border-left: 0.1rem solid var(--md-default-fg-color--lightest);
+}
+
+/* Signatures are rendered as code blocks, which do not wrap - and connecto's are
+   long enough (`edges(x, *, upstream, downstream, by_roi, rois, min_weight, ...)`)
+   that the tail slid off the right edge. Wrap them, and hang the continuation so
+   the parameters stay readable as a list. */
+.md-typeset .doc-signature > pre > code,
+.md-typeset .doc-signature .highlight code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-indent: -2ch;
+  padding-left: 2ch;
+}
+
+/* ---------------------------------------------------------------- misc */
+
+.md-typeset .md-button {
+  border-radius: 0.3rem;
+}
+
+/* Long root IDs are the single most-copied thing on this site. */
+.md-typeset code {
+  word-break: normal;
+}

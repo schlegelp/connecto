@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="connecto">
+  <defs>
+    <radialGradient id="glass" cx="36%" cy="30%" r="78%">
+      <stop offset="0%" stop-color="#fef3c7"/>
+      <stop offset="26%" stop-color="#c4b5fd"/>
+      <stop offset="62%" stop-color="#7c5cff"/>
+      <stop offset="100%" stop-color="#3b1e93"/>
+    </radialGradient>
+    <linearGradient id="base" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd75e"/>
+      <stop offset="100%" stop-color="#f0872a"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="50%" r="50%">
+      <stop offset="55%" stop-color="#a78bfa" stop-opacity=".55"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <circle cx="32" cy="27" r="27" fill="url(#halo)"/>
+
+  <!-- the stand -->
+  <path d="M18 50c3.6-3.2 6.4-4.8 14-4.8S42.4 46.8 46 50c1.6 1.4.7 3.4-1.6 3.4H19.6C17.3 53.4 16.4 51.4 18 50Z" fill="url(#base)"/>
+
+  <!-- the ball -->
+  <circle cx="32" cy="27" r="20" fill="url(#glass)"/>
+
+  <!-- what it shows you: a connectome -->
+  <g stroke="#fffbeb" stroke-width="1.4" stroke-linecap="round" opacity=".85">
+    <path d="M24 32 33 22 41 30"/>
+    <path d="M33 22 30 34"/>
+    <path d="M24 32 30 34"/>
+  </g>
+  <g fill="#fffbeb">
+    <circle cx="24" cy="32" r="2.6"/>
+    <circle cx="33" cy="22" r="2.6"/>
+    <circle cx="41" cy="30" r="2.6"/>
+    <circle cx="30" cy="34" r="2.2"/>
+  </g>
+
+  <!-- specular highlight -->
+  <ellipse cx="24" cy="18" rx="6" ry="4.2" fill="#fff" opacity=".5" transform="rotate(-28 24 18)"/>
+</svg>

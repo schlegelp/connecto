@@ -1,0 +1,312 @@
+"""The neuPrint backend.
+
+Implements the same ten ``_fetch_*`` hooks as the CAVE backend, against
+``neuprint-python``. Everything the user sees is normalised above this.
+"""
+
+from __future__ import annotations
+
+import logging
+
+import numpy as np
+import pandas as pd
+
+from ...core.dataset import Dataset, namespace
+from ...core.namespaces import (
+    Annotations,
+    Connectivity,
+    Meshes,
+    ROIs,
+    Skeletons,
+    Somas,
+    Viz,
+)
+from ...core.spec import Cap
+from ...core.version import Version
+from ...exceptions import CapabilityError
+from . import versions as _versions
+
+logger = logging.getLogger("connecto")
+
+__all__ = ["NeuPrintDataset"]
+
+_CLIENTS: dict = {}
+
+
+class NeuPrintDataset(Dataset):
+    """A dataset served by a neuPrint server."""
+
+    annotations = namespace(Annotations, Cap.ANNOTATIONS)
+    connectivity = namespace(Connectivity, Cap.CONNECTIVITY)
+    skeletons = namespace(Skeletons, Cap.SKELETONS)
+    meshes = namespace(Meshes, Cap.MESHES)
+    rois = namespace(ROIs, Cap.ROIS)
+    somas = namespace(Somas, Cap.SOMAS)
+    viz = namespace(Viz, Cap.NEUROGLANCER)
+
+    # neuPrint returns voxel coordinates; spec.voxel_size takes them to nm.
+    _raw_position_units = "voxel"
+
+    _edge_colmap = {"pre": "bodyId_pre", "post": "bodyId_post", "weight": "weight", "roi": "roi"}
+    _synapse_colmap = {
+        "pre": "bodyId_pre",
+        "post": "bodyId_post",
+        "pre_x": "x_pre", "pre_y": "y_pre", "pre_z": "z_pre",
+        "post_x": "x_post", "post_y": "y_post", "post_z": "z_post",
+        "score": "confidence_pre",
+        "roi": "roi_pre",
+    }
+    _skeleton_colmap = {
+        "node_id": "rowId",
+        "parent_id": "link",
+        "x": "x", "y": "y", "z": "z", "radius": "radius",
+    }
+
+    # ------------------------------------------------------------------- client
+
+    @property
+    def _server_and_name(self) -> tuple[str, str]:
+        server, name, _ = _versions.parse_source(self.source)
+        return server, name
+
+    @property
+    def _auth_server(self) -> str:
+        """neuPrint tokens are per-server, and the servers are separate deployments."""
+        return self._server_and_name[0]
+
+    @property
+    def _token(self):
+        from ...auth import get_token
+
+        server, _ = self._server_and_name
+        return get_token("neuprint", server=server).token
+
+    @property
+    def client(self):
+        """A client pinned to this dataset *and version*."""
+        from neuprint import Client
+
+        from ...auth import get_token
+        from ...servers import upstream_errors
+
+        server, _ = self._server_and_name
+        dataset = str(self.version)  # e.g. "hemibrain:v1.2.1" or, for fish2, "fish2"
+        key = (server, dataset)
+        if key not in _CLIENTS:
+            token = get_token("neuprint", server=server).token
+            with upstream_errors(
+                "neuprint", server=server, resource=dataset, dataset=self
+            ):
+                _CLIENTS[key] = Client(server, dataset=dataset, token=token)
+        return _CLIENTS[key]
+
+    # ------------------------------------------------------------------ versions
+
+    def _criteria(self, ids=None, *, label="Segment", **kwargs):
+        """A neuPrint criteria object.
+
+        Note ``label="Segment"``, not neuprint's own default of ``"Neuron"``.
+        neuPrint splits its bodies into ``:Neuron`` (above a synapse threshold) and
+        ``:Segment`` (everything, including small fragments), and its default
+        criteria quietly matches only the former. CAVE draws no such distinction,
+        so leaving the default in place would mean the same query returned *fewer
+        partners* on neuPrint than on CAVE - a silent divergence of exactly the
+        kind connecto exists to prevent. Matching ``:Segment`` includes the
+        fragments, which is what CAVE does.
+
+        Filter them out afterwards if you don't want them; that is a choice, and
+        it should be the caller's.
+        """
+        from neuprint import NeuronCriteria as NC
+
+        if ids is not None:
+            kwargs["bodyId"] = np.asarray(ids, dtype="int64").tolist()
+        return NC(client=self.client, label=label, **kwargs)
+
+    def _resolve_version(self, request) -> Version:
+        server, name, pinned = _versions.parse_source(self.source)
+        # The spec's own version wins over "latest": a spec that says
+        # hemibrain:v1.2.1 means v1.2.1, not "whatever landed this morning".
+        if request in (None, "latest") and pinned:
+            request = pinned
+        return _versions.resolve(server, name, request, token=self._token)
+
+    def _list_versions(self) -> list:
+        server, name = self._server_and_name
+        return _versions.available(server, name, self._token)
+
+    def _find_version(self, ids, *, raise_missing=True) -> Version:
+        # Body IDs are immutable, so there is nothing to search for. This is the
+        # point of version="auto": the same call is correct on both backends.
+        return self.version
+
+    def _ids_exist(self, ids, version) -> np.ndarray:
+        from neuprint import fetch_neurons
+
+        found, _ = fetch_neurons(self._criteria(ids), client=self.client)
+        return np.isin(ids, found["bodyId"].to_numpy())
+
+    # --------------------------------------------------------------- annotations
+
+    def _fetch_annotations(self, source, version) -> pd.DataFrame:
+        from ...sources import fetch as fetch_source
+
+        return fetch_source(source, self, version)
+
+    # -------------------------------------------------------------- connectivity
+
+    def _fetch_edges(self, pre, post, version, *, by_roi, min_weight, rois) -> pd.DataFrame:
+        from neuprint import fetch_adjacencies, fetch_simple_connections
+
+        # An explicit Segment-matching criteria on the *unconstrained* side, rather
+        # than None - passing None lets neuprint fall back to its :Neuron-only
+        # default and quietly drop fragment partners. See _criteria().
+        src = self._criteria(pre)
+        tgt = self._criteria(post)
+
+        if by_roi:
+            _, conn = fetch_adjacencies(
+                sources=src, targets=tgt, rois=rois,
+                min_total_weight=min_weight, client=self.client,
+            )
+            return conn.reset_index(drop=True)
+
+        conn = fetch_simple_connections(
+            upstream_criteria=src,
+            downstream_criteria=tgt,
+            rois=rois,
+            min_weight=min_weight,
+            properties=[],
+            client=self.client,
+        )
+        return conn.reset_index(drop=True)
+
+    def _fetch_synapses(
+        self, pre, post, version, *, min_score=None, transmitters=False, rois=None, **kw
+    ) -> pd.DataFrame:
+        from neuprint import SynapseCriteria as SC
+        from neuprint import fetch_synapse_connections
+
+        src = self._criteria(pre) if pre is not None else None
+        tgt = self._criteria(post) if post is not None else None
+
+        sc = SC(rois=rois, client=self.client) if rois is not None else None
+        syn = fetch_synapse_connections(
+            source_criteria=src, target_criteria=tgt,
+            synapse_criteria=sc, client=self.client,
+        )
+
+        if min_score is not None:
+            syn = syn[syn["confidence_pre"] >= min_score]
+
+        return syn.reset_index(drop=True)
+
+    # ---------------------------------------------------------------- morphology
+
+    def _fetch_skeletons(self, ids, version, *, heal: bool = True, progress: bool = True, **opts):
+        from tqdm.auto import tqdm
+
+        for body in tqdm(ids, desc="Skeletons", disable=not progress or len(ids) < 2, leave=False):
+            yield int(body), self.client.fetch_skeleton(
+                int(body), heal=heal, format="pandas"
+            )
+
+    def _fetch_meshes(self, ids, version, *, lod=None, progress: bool = True, **opts):
+        import navis.interfaces.neuprint as neu
+
+        neurons = neu.fetch_mesh_neuron(
+            np.asarray(ids, dtype="int64").tolist(),
+            lod=1 if lod is None else lod,
+            client=self.client,
+            progress=progress,
+        )
+        for n in navis_list(neurons):
+            yield int(n.id), n.trimesh
+
+    # --------------------------------------------------------------------- somas
+
+    def _fetch_somas(self, ids, version) -> pd.DataFrame:
+        from neuprint import fetch_neurons
+
+        crit = self._criteria(ids) if ids is not None else self._criteria(soma=True)
+        neurons, _ = fetch_neurons(crit, client=self.client)
+
+        if "somaLocation" not in neurons.columns:
+            raise CapabilityError(f"{self.label} has no soma locations.")
+
+        loc = neurons["somaLocation"].dropna()
+        xyz = np.array([list(v) for v in loc], dtype="float32").reshape(-1, 3)
+        vox = np.asarray(self.spec.voxel_size or (1, 1, 1), dtype="float32")
+        xyz = xyz * vox  # -> nm
+
+        out = pd.DataFrame(
+            {
+                "id": neurons.loc[loc.index, "bodyId"].astype("int64").to_numpy(),
+                "x": xyz[:, 0], "y": xyz[:, 1], "z": xyz[:, 2],
+            }
+        )
+        if "somaRadius" in neurons.columns:
+            out["radius"] = neurons.loc[loc.index, "somaRadius"].to_numpy()
+        return out.reset_index(drop=True)
+
+    # ---------------------------------------------------------------------- ROIs
+
+    def _fetch_rois(self) -> pd.DataFrame:
+        client = self.client
+        primary = set(client.primary_rois)
+        return pd.DataFrame(
+            {
+                "roi": sorted(client.all_rois),
+                "primary": [r in primary for r in sorted(client.all_rois)],
+            }
+        )
+
+    def _fetch_roi_hierarchy(self):
+        import networkx as nx
+
+        tree = self.client.meta.get("roiHierarchy")
+        if not tree:
+            raise CapabilityError(f"{self.label} has no ROI hierarchy.")
+
+        g = nx.DiGraph()
+
+        def walk(node):
+            name = node["name"]
+            g.add_node(name)
+            for child in node.get("children", []) or []:
+                g.add_edge(name, child["name"])
+                walk(child)
+
+        walk(tree)
+        return g
+
+    def _fetch_roi_mesh(self, roi: str):
+        import io
+
+        import trimesh
+
+        obj = self.client.fetch_roi_mesh(roi)
+        return trimesh.load(io.BytesIO(obj), file_type="obj")
+
+    def expand_rois(self, rois) -> list[str]:
+        """Expand a super-ROI ("Brain", "VNC") into its primary ROIs."""
+        import networkx as nx
+
+        g = self._fetch_roi_hierarchy()
+        primary = set(self.client.primary_rois)
+
+        out = []
+        for roi in np.atleast_1d(rois):
+            if roi in primary:
+                out.append(roi)
+            elif roi in g:
+                out += [n for n in nx.descendants(g, roi) if n in primary]
+            else:
+                raise ValueError(f"{self.label} has no ROI {roi!r}.")
+        return sorted(set(out))
+
+
+def navis_list(x):
+    import navis
+
+    return x if isinstance(x, navis.NeuronList) else navis.NeuronList(x)

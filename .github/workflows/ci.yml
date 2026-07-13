@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded pushes to a branch are worth cancelling; a tag build is not - it is
+  # the one that publishes, and it only ever runs once.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Lint only. `ruff format --check` is deliberately *not* here: the codebase
+      # is not currently formatter-clean, so it would fail on every run. Run
+      # `uv run ruff format .` across the tree first if you want to add it.
+      - run: uv run --extra dev ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - run: uv sync --extra dev
+
+      # The `network` marker is already deselected by `addopts` in pyproject, so
+      # this is the offline suite: no credentials, nothing that talks to CAVE or
+      # neuPrint. The conformance suite still has to be run by hand.
+      - run: uv run --extra dev pytest -v --cov=connecto --cov-report=term-missing
+
+  # Build on every run, not just tags, so a broken sdist/wheel surfaces in the PR
+  # that broke it rather than at release time.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv build
+
+      # `version` in pyproject is static, so a tag can disagree with the thing it
+      # tags. That mistake is unfixable once PyPI has the file - a version number
+      # can never be reused - so catch it here.
+      - name: Check tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          project="$(python -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$project" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME wants version $tag, but pyproject.toml says $project."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    # Tagged releases only, and only once the tests and the build have gone green.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, test, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/connecto
+    permissions:
+      # Mints the short-lived OIDC token that PyPI trades for an upload token.
+      # This is the whole trusted-publishing mechanism; there is no API token.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

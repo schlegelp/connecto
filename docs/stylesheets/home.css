@@ -1,0 +1,374 @@
+/* The landing page.
+ *
+ * Everything here is scoped to the presence of the hero, so this file is safe to
+ * load on every page. `:has()` does the scoping with no flash of unstyled hero;
+ * `[data-cn-home]` (set by orb.js) is the fallback for browsers without it.
+ */
+
+:root {
+  /* Overwritten from JS with the real measurements - these are only the values
+     used for the single frame before it runs. */
+  --cn-header-h: 2.4rem;
+  --cn-tabs-h: 2.4rem;
+  --cn-violet: #7c5cff;
+  --cn-amber: #ffc120;
+  --cn-rose: #ff8a8c;
+}
+
+/* -------------------------------------------------------------------- layout */
+
+/* Pinned to the viewport rather than to an ancestor: the hero has to run to the
+   very top of the window, *behind* the sticky header, and `fixed` gets there
+   without depending on which of the theme's wrappers happen to be positioned.
+   The header is then made transparent, and `.md-main` is pushed down by a
+   viewport (and given an opaque background) so the page scrolls on over it. */
+.cn-hero {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+  pointer-events: none;
+  background: #08070f;
+}
+
+.cn-hero__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Blends the artwork into the page below it, and buys the headline some
+   contrast without dimming the whole image. */
+/* Darkens the left, where the copy sits, and settles the bottom edge down into
+   near-black. It deliberately does *not* fade to `--md-default-bg-color`: in light
+   mode that is white, which reads as a bank of fog rolling across the bottom of
+   the artwork. */
+.cn-hero__scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(to right, rgba(8, 7, 15, 0.75) 0%, rgba(8, 7, 15, 0.38) 40%, rgba(8, 7, 15, 0) 66%),
+    linear-gradient(to bottom, rgba(8, 7, 15, 0) 55%, rgba(8, 7, 15, 0.45) 82%, rgba(8, 7, 15, 0.92) 100%);
+}
+
+/* Opaque, and above the fixed hero - this is what hides the artwork once you
+   have scrolled past it. */
+body:has(.cn-hero) .md-main,
+body[data-cn-home] .md-main,
+body:has(.cn-hero) .md-footer,
+body[data-cn-home] .md-footer {
+  position: relative;
+  z-index: 1;
+  background-color: var(--md-default-bg-color);
+}
+
+body:has(.cn-hero) .md-main,
+body[data-cn-home] .md-main {
+  margin-top: calc(100vh - var(--cn-header-h) - var(--cn-tabs-h));
+}
+
+body:has(.cn-hero) .md-footer,
+body[data-cn-home] .md-footer {
+  background-color: var(--md-footer-bg-color);
+}
+
+/* --------------------------------------------------------------------- chrome */
+
+body[data-cn-home] .md-header,
+body[data-cn-home] .md-tabs {
+  color: #fff;
+  transition: background-color 0.25s, box-shadow 0.25s;
+}
+
+body[data-cn-home] .md-header {
+  background-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Once you have scrolled off the artwork the header has to become legible
+   against the page again. */
+body[data-cn-home].cn-scrolled .md-header {
+  color: var(--md-default-fg-color);
+  background-color: var(--md-default-bg-color--light);
+  box-shadow: 0 0 0.2rem rgba(0, 0, 0, 0.1), 0 0.2rem 0.4rem rgba(0, 0, 0, 0.2);
+  -webkit-backdrop-filter: blur(0.4rem);
+  backdrop-filter: blur(0.4rem);
+}
+
+/* The tabs only ever sit over the hero, so they can stay light throughout. */
+body[data-cn-home] .md-tabs {
+  background-color: transparent;
+  box-shadow: 0 -0.05rem 0 inset rgba(255, 255, 255, 0.14);
+}
+
+body[data-cn-home] .md-tabs__link {
+  color: rgba(255, 255, 255, 0.72);
+  opacity: 1;
+}
+
+body[data-cn-home] .md-tabs__link:hover,
+body[data-cn-home] .md-tabs__item--active .md-tabs__link {
+  color: #fff;
+}
+
+/* -------------------------------------------------------------------- teaser */
+
+/* Absolute, not fixed: no ancestor is positioned, so this resolves against the
+   document origin - which means the copy scrolls away normally while the hero
+   behind it stays pinned. */
+.cn-teaser {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100vh;
+  pointer-events: none;
+}
+
+.cn-teaser .md-grid {
+  width: 100%;
+}
+
+.cn-teaser__inner {
+  max-width: 30rem;
+  padding: 0 0.8rem;
+  pointer-events: auto;
+}
+
+/* These all carry `.cn-teaser` as well as their own class: the teaser lives inside
+   an `.md-typeset` (which is what gives the buttons their styling), and
+   `.md-typeset h1` would otherwise win on specificity and paint the headline
+   near-black on a near-black backdrop. */
+.cn-teaser .cn-teaser__eyebrow {
+  margin: 0 0 0.9rem;
+  color: var(--cn-amber);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.cn-teaser .cn-teaser__title {
+  margin: 0 0 0.9rem;
+  color: #fff;
+  font-size: 2.4rem;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+  text-shadow: 0 0.1rem 1.2rem rgba(0, 0, 0, 0.75);
+}
+
+.cn-teaser .cn-teaser__text {
+  margin: 0 0 1.6rem;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.82rem;
+  line-height: 1.65;
+  text-shadow: 0 0.05rem 0.6rem rgba(0, 0, 0, 0.85);
+}
+
+.cn-teaser .cn-teaser__text strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.cn-teaser__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.cn-teaser .md-button {
+  margin: 0;
+  border: none;
+  border-radius: 0.4rem;
+  color: #fff;
+  font-weight: 600;
+  -webkit-backdrop-filter: blur(0.2rem);
+  backdrop-filter: blur(0.2rem);
+  background-color: rgba(255, 255, 255, 0.12);
+  transition: transform 0.2s, box-shadow 0.2s, background-color 0.2s;
+}
+
+.cn-teaser .md-button:hover,
+.cn-teaser .md-button:focus {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.cn-teaser .md-button--primary {
+  background: linear-gradient(35deg, var(--cn-violet) 0%, var(--cn-rose) 62%, var(--cn-amber) 100%);
+  box-shadow: 0 0.3rem 1.2rem rgba(124, 92, 255, 0.4);
+}
+
+.cn-teaser .md-button--primary:hover,
+.cn-teaser .md-button--primary:focus {
+  background: linear-gradient(35deg, var(--cn-violet) 0%, var(--cn-rose) 55%, var(--cn-amber) 100%);
+  box-shadow: 0 0.4rem 1.6rem rgba(124, 92, 255, 0.6);
+}
+
+/* ------------------------------------------------------------------ scroll cue */
+
+.cn-hero__cue {
+  position: absolute;
+  bottom: 1.4rem;
+  left: 50%;
+  width: 1px;
+  height: 1.8rem;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.16);
+  transform: translateX(-50%);
+}
+
+.cn-hero__cue span {
+  position: absolute;
+  inset: 0;
+  display: block;
+  background: linear-gradient(to bottom, transparent, #fff);
+  animation: cn-cue 2.2s ease-in-out infinite;
+}
+
+@keyframes cn-cue {
+  0% { transform: translateY(-100%); }
+  60%, 100% { transform: translateY(100%); }
+}
+
+body.cn-scrolled .cn-hero__cue {
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+/* ----------------------------------------------------------------- no WebGL */
+
+/* Not every machine has a GPU worth the name. A static approximation of the ball
+   beats a black rectangle - and beats pretending nothing was meant to be there. */
+.cn-hero--fallback {
+  background:
+    radial-gradient(circle at 62% 48%, rgba(255, 193, 32, 0.55) 0%, rgba(255, 138, 140, 0.5) 14%, rgba(124, 92, 255, 0.75) 30%, rgba(59, 30, 147, 0.5) 42%, rgba(8, 7, 15, 0) 58%),
+    radial-gradient(circle at 62% 48%, rgba(124, 92, 255, 0.28) 0%, rgba(8, 7, 15, 0) 46%),
+    linear-gradient(to bottom, #0b0a18, #08070f);
+}
+
+.cn-hero--fallback .cn-hero__canvas {
+  display: none;
+}
+
+/* --------------------------------------------------------------- home content */
+
+/* The homepage body has no sidebars, so let it use the full grid. */
+body[data-cn-home] .md-content {
+  max-width: none;
+}
+
+.cn-section {
+  padding: 1.2rem 0 0.4rem;
+}
+
+.cn-section > h2 {
+  margin-bottom: 0.2rem !important;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.cn-section__lead {
+  max-width: 34rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.md-typeset .cn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.8rem;
+  margin: 1.2rem 0 2rem;
+}
+
+.md-typeset .cn-card {
+  padding: 1rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem;
+  background: var(--md-default-bg-color);
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+
+.md-typeset .cn-card:hover {
+  border-color: var(--cn-violet);
+  box-shadow: 0 0.4rem 1.2rem rgba(124, 92, 255, 0.14);
+  transform: translateY(-2px);
+}
+
+.md-typeset .cn-card > :first-child {
+  margin-top: 0;
+}
+
+.md-typeset .cn-card > :last-child {
+  margin-bottom: 0;
+}
+
+.md-typeset .cn-card h3 {
+  margin-bottom: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.md-typeset .cn-card p {
+  font-size: 0.7rem;
+  line-height: 1.6;
+}
+
+.cn-card__icon {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+/* ------------------------------------------------------------------ responsive */
+
+@media screen and (max-width: 76.1875em) {
+  .cn-teaser__inner {
+    max-width: 26rem;
+  }
+  .cn-teaser__title {
+    font-size: 1.9rem;
+  }
+}
+
+@media screen and (max-width: 59.9375em) {
+  .cn-hero__scrim {
+    background:
+      linear-gradient(to bottom, rgba(8, 7, 15, 0.15) 0%, rgba(8, 7, 15, 0.55) 45%, rgba(8, 7, 15, 0.88) 72%, rgba(8, 7, 15, 0.96) 100%);
+  }
+  .cn-teaser {
+    align-items: flex-end;
+  }
+  .cn-teaser__inner {
+    max-width: none;
+    padding-bottom: 3.2rem;
+  }
+  .cn-teaser__title {
+    font-size: 1.7rem;
+  }
+  .cn-hero__cue {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cn-hero__cue span {
+    animation: none;
+  }
+  .cn-teaser .md-button,
+  .md-typeset .cn-card {
+    transition: none;
+  }
+}

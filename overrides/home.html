@@ -1,0 +1,47 @@
+{#-
+  The landing page.
+
+  The `hero` block renders inside `.md-container`, above the tabs and the main
+  content - so a hero that is absolutely positioned lands *behind* the sticky
+  header, which is what lets the header float over the artwork. `home.css` then
+  pushes `.md-main` down by one viewport so the page still scrolls on into
+  ordinary content underneath.
+
+  The stylesheet and the shader are loaded globally (see `extra_css` /
+  `extra_javascript` in zensical.toml) rather than from a block here, so that
+  instant navigation cannot swap them out from under the page.
+-#}
+{% extends "base.html" %}
+
+{% block hero %}
+  <div class="cn-hero" aria-hidden="true">
+    <canvas class="cn-hero__canvas" id="cn-orb"></canvas>
+    <div class="cn-hero__scrim"></div>
+  </div>
+
+  {#- `md-typeset` is what carries the theme's `.md-button` styling. -#}
+  <div class="cn-teaser">
+    <div class="md-typeset md-grid">
+      <div class="cn-teaser__inner">
+        <p class="cn-teaser__eyebrow">One interface. Every connectome.</p>
+        <h1 class="cn-teaser__title">Ask the same question<br>of any brain</h1>
+        <p class="cn-teaser__text">
+          FlyWire, hemibrain, BANC, MICrONS and zebrafish speak different
+          dialects &mdash; CAVE and neuPrint, materialization versions and body
+          IDs. <strong>connecto</strong> normalises all of it into one API that
+          hands back the same frame, in the same units, from every dataset.
+        </p>
+        <p class="cn-teaser__actions">
+          <a class="md-button md-button--primary" href="{{ 'get-started/' | url }}">
+            Get started
+          </a>
+          <a class="md-button" href="{{ 'tutorials/' | url }}">
+            Tutorials
+          </a>
+        </p>
+      </div>
+    </div>
+
+    <div class="cn-hero__cue"><span></span></div>
+  </div>
+{% endblock %}
