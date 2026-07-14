@@ -58,8 +58,8 @@ None"*. Only the second is an error.
 Capabilities are not just per-argument. Whole namespaces either exist or do not:
 
 ```python
-hasattr(fw, "segmentation")   # True  - CAVE has a chunkedgraph
-hasattr(hb, "segmentation")   # False - neuPrint doesn't
+hasattr(fw, "proofreading")   # True  - FlyWire is still being edited
+hasattr(hb, "proofreading")   # False - hemibrain is frozen; there is no edit history
 ```
 
 This is also how a capability earns its keep. `L2CACHE` used to gate nothing you could
@@ -82,17 +82,41 @@ and you do not have to learn a connecto-specific idiom to write adaptive code.
 Ask anyway, and you get told why — not a bare `AttributeError`:
 
 ```python
-hb.segmentation
+hb.proofreading
 ```
 
 ```
-CapabilityError: hemibrain (neuprint) has no `segmentation` - it does not support
-segmentation. Available: annotations, connectivity, meshes, roi_connectivity, rois,
-skeletons, somas, synapse_scores, synapses.
+CapabilityError: hemibrain (neuprint) has no `proofreading` - it does not support
+proofreading. Available: annotations, connectivity, meshes, roi_connectivity, rois,
+segmentation, skeletons, somas, synapse_scores, synapses.
 ```
 
 The error lists what the dataset *can* do. An error that only says "no" makes you go
 and read the source; this one answers the question you were about to ask next.
+
+## One word, two promises: `SEGMENTATION` and `CHUNKEDGRAPH`
+
+"Does this dataset have a segmentation?" turns out to be two questions, and hemibrain
+answers them differently. It *does* have a segmentation volume — a flat `precomputed://`
+bucket you can ask "what body is at this point". It does *not* have a chunkedgraph:
+its body IDs were frozen at publication, there are no supervoxels beneath them, and
+nobody is proofreading them any more.
+
+So there are two capabilities, and hemibrain has exactly one of them:
+
+```python
+hb.segmentation.locs_to_segments(tbars)   # fine - reads the volume
+hb.segmentation.update_ids([1734350788])  # CapabilityError: no chunkedgraph
+```
+
+Collapsing them into one would force a choice between two lies: deny that hemibrain has
+a segmentation (it does), or promise `update_ids` on IDs that cannot change (it isn't).
+Splitting them lets both datasets tell the truth:
+
+```python
+fw.supports(Cap.SEGMENTATION), fw.supports(Cap.CHUNKEDGRAPH)   # (True, True)
+hb.supports(Cap.SEGMENTATION), hb.supports(Cap.CHUNKEDGRAPH)   # (True, False)
+```
 
 ## Checking up front
 
@@ -126,16 +150,18 @@ cn.capability_matrix()
 ```
 
 ```
-                    annotations  connectivity  synapses  synapse_scores  nt_per_synapse  roi_connectivity   rois  skeletons  meshes  l2cache  segmentation  proofreading  somas   live  neuroglancer
-banc                       True          True      True           False           False              True  False       True    True     True          True         False   True  False          True
-fish2                      True          True      True            True           False              True   True       True    True    False         False         False   True  False         False
-flywire                    True          True      True            True            True              True  False       True    True    False          True          True   True  False          True
-flywire-production         True          True      True            True            True              True  False       True    True     True          True          True   True   True          True
-hemibrain                  True          True      True            True           False              True   True       True    True    False         False         False   True  False         False
-malecns                    True          True      True            True           False              True   True       True    True    False         False         False   True  False         False
-manc                       True          True      True            True           False              True   True       True    True    False         False         False   True  False         False
-microns                    True          True      True           False           False             False  False       True    True     True          True         False   True  False          True
-optic-lobe                 True          True      True            True           False              True   True       True    True    False         False         False   True  False         False
+                    annotations  connectivity  synapses  synapse_scores  nt_per_synapse  roi_connectivity   rois  skeletons  meshes  l2cache  segmentation  chunkedgraph  proofreading  somas   live  neuroglancer
+aedes                     False          True      True           False           False             False  False       True    True     True          True          True         False   True   True          True
+banc                       True          True      True           False           False              True  False       True    True     True          True          True         False   True  False          True
+fanc                       True          True      True            True           False             False  False       True    True     True          True          True          True   True   True          True
+fish2                      True          True      True            True           False              True   True       True    True    False         False         False         False   True  False         False
+flywire                    True          True      True            True            True              True  False       True    True    False          True          True          True   True  False          True
+flywire-production         True          True      True            True            True              True  False       True    True     True          True          True          True   True   True          True
+hemibrain                  True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
+malecns                    True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
+manc                       True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
+microns                    True          True      True           False           False             False  False       True    True     True          True          True         False   True  False          True
+optic-lobe                 True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
 ```
 
 A `False` means the call **raises**. It does not mean it returns something subtly
@@ -160,7 +186,8 @@ a different and much more misleading statement than *"we do not have this field"
 | `ROIS` | an ROI hierarchy and meshes |
 | `SKELETONS` / `MESHES` | morphology |
 | `L2CACHE` | CAVE's level-2 chunk cache — carries the `ds.l2` namespace |
-| `SEGMENTATION` | chunkedgraph — root IDs, supervoxels, `update_ids` |
+| `SEGMENTATION` | a segmentation volume you can query — "what body is at this point", cutouts, voxels |
+| `CHUNKEDGRAPH` | that volume is a *proofreadable graph* — supervoxels, root-ID history, `update_ids` |
 | `PROOFREADING` | edit history, proofreading status |
 | `SOMAS` | soma / nucleus positions |
 | `LIVE` | non-materialized "right now" queries |

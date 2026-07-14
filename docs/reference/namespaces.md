@@ -49,9 +49,17 @@ See the [Neuroglancer guide](../guides/neuroglancer.md) for colouring, groups an
 
 ::: connecto.viz.neuroglancer.decode_url
 
-## Segmentation (CAVE only)
+## Segmentation
 
-::: connecto.backends.cave.segmentation.Segmentation
+Present wherever the dataset declares `Cap.SEGMENTATION` — which includes neuPrint,
+whose flat `precomputed://` volumes read as well as CAVE's graphene ones. The methods
+that need a *chunkedgraph* (supervoxels, `update_ids`, root-ID history) additionally
+require `Cap.CHUNKEDGRAPH` and raise on a flat volume rather than inventing an answer.
+
+Coordinates are nanometres, like everywhere else in connecto; pass `units="voxel"` if
+yours are not.
+
+::: connecto.core.segmentation.Segmentation
 
 ## Proofreading (CAVE only)
 

@@ -557,9 +557,6 @@ docs = [
 flytable = [
     { name = "sea-serpent" },
 ]
-points = [
-    { name = "pathos" },
-]
 
 [package.metadata]
 requires-dist = [
@@ -572,7 +569,6 @@ requires-dist = [
     { name = "neuprint-python", specifier = ">=0.5.1" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pandas", specifier = ">=2.0" },
-    { name = "pathos", marker = "extra == 'points'", specifier = ">=0.3.3" },
     { name = "pyarrow", specifier = ">=14.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
@@ -583,7 +579,7 @@ requires-dist = [
     { name = "trimesh", specifier = ">=4.0" },
     { name = "zensical", marker = "extra == 'docs'", specifier = ">=0.0.50" },
 ]
-provides-extras = ["clio", "flytable", "points", "dev", "docs"]
+provides-extras = ["clio", "flytable", "dev", "docs"]
 
 [[package]]
 name = "contourpy"

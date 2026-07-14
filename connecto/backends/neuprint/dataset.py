@@ -21,6 +21,7 @@ from ...core.namespaces import (
     Somas,
     Viz,
 )
+from ...core.segmentation import Segmentation
 from ...core.spec import Cap
 from ...core.version import Version
 from ...exceptions import CapabilityError
@@ -43,9 +44,35 @@ class NeuPrintDataset(Dataset):
     rois = namespace(ROIs, Cap.ROIS)
     somas = namespace(Somas, Cap.SOMAS)
     viz = namespace(Viz, Cap.NEUROGLANCER)
+    segmentation = namespace(Segmentation, Cap.SEGMENTATION)
 
     # neuPrint returns voxel coordinates; spec.voxel_size takes them to nm.
     _raw_position_units = "voxel"
+
+    # ------------------------------------------------------------------ volumes
+
+    def _ngl_layer(self, data_type: str) -> str | None:
+        """The source URL of the first `neuroglancerMeta` layer of this type.
+
+        neuPrint advertises its volumes in `Client.meta["neuroglancerMeta"]` - a
+        *list* of layers, image and segmentation together and in no promised order.
+        So it has to be searched by `dataType`, not indexed: on hemibrain, entry 0
+        is the grayscale.
+
+        Only some servers fill this in at all (hemibrain does; MANC, optic-lobe,
+        maleCNS and fish2 all return None), which is why the specs carry a verified
+        `segmentation_source` and this is only the fallback.
+        """
+        for layer in self.client.meta.get("neuroglancerMeta") or []:
+            if layer.get("dataType") == data_type and layer.get("source"):
+                return layer["source"]
+        return None
+
+    def _segmentation_source(self, *, format_for: str = "raw") -> str | None:
+        return self.spec.segmentation_source or self._ngl_layer("segmentation")
+
+    def _image_source(self) -> str | None:
+        return self._ngl_layer("image")
 
     _edge_colmap = {"pre": "bodyId_pre", "post": "bodyId_post", "weight": "weight", "roi": "roi"}
     _synapse_colmap = {

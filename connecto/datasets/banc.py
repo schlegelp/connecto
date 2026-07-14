@@ -58,7 +58,7 @@ BANC_SPEC = DatasetSpec(
     capabilities=frozenset(
         {
             Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.ROI_CONN,
-            Cap.SKELETONS, Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION,
+            Cap.SKELETONS, Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH,
             Cap.SOMAS, Cap.NEUROGLANCER,
         }
     ),

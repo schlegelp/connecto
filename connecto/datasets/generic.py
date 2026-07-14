@@ -50,7 +50,7 @@ def probe_cave(datastack: str, **overrides) -> DatasetSpec:
     proofread = next((t for t in sorted(tables) if _PROOFREAD_RE.search(t)), None)
     ann_tables = [t for t in sorted(tables) if _ANNOTATION_RE.search(t)]
 
-    caps = {Cap.SEGMENTATION, Cap.MESHES, Cap.NEUROGLANCER}
+    caps = {Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.MESHES, Cap.NEUROGLANCER}
     if synapse_table:
         caps |= {Cap.CONNECTIVITY, Cap.SYNAPSES}
     if ann_tables:

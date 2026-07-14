@@ -593,31 +593,18 @@ def _viewer_and_dialect(ds, viewer=None, dialect=None) -> tuple[str, str]:
 
 
 def _sources(ds, dialect: str) -> tuple[str, str | None]:
-    """(segmentation, image) sources, formatted for the viewer we are targeting."""
-    seg = ds.spec.segmentation_source
-    img = None
+    """(segmentation, image) sources, formatted for the viewer we are targeting.
 
-    if ds.backend_kind == "cave":
-        info = ds.client.info
-        if seg is None:
-            # `middleauth+` is not decoration: it tells a modern viewer to run CAVE's
-            # login flow, and without it a protected datastack simply fails to load.
-            # The old viewer, conversely, chokes on it. caveclient already knows which
-            # is which, so ask it rather than splicing the string here and drifting.
-            fmt = "neuroglancer" if dialect == "seunglab" else "cave_explorer"
-            seg = info.segmentation_source(format_for=fmt)
-        # `image_source(format_for=...)` returns None for both viewer formats -
-        # caveclient only maps the image for "raw"/"cloudvolume". The raw value is a
-        # `precomputed://` URL, which is exactly what a viewer wants anyway.
-        img = info.image_source(format_for="raw")
-
-    elif ds.backend_kind == "neuprint" and seg is None:
-        meta = ds.client.meta.get("neuroglancerMeta") or []
-        seg = meta[0]["dataInstance"] if meta else None
-
+    The dataset resolves these - see `Dataset._segmentation_source`. `format_for` is
+    what decides whether a graphene URL carries the `middleauth+` prefix, and that is
+    not decoration: it tells a modern viewer to run CAVE's login flow, and a protected
+    datastack will not load without it, while the old fork chokes on it.
+    """
+    fmt = "neuroglancer" if dialect == "seunglab" else "cave_explorer"
+    seg = ds._segmentation_source(format_for=fmt)
     if seg is None:
         raise ValueError(f"{ds.label} declares no segmentation source.")
-    return seg, img
+    return seg, ds._image_source()
 
 
 def _state_server(ds) -> str | None:

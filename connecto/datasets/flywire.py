@@ -32,7 +32,7 @@ _ANNOTATIONS = (
 _CAPS = {
     Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SYNAPSE_SCORES,
     Cap.NT_PER_SYNAPSE, Cap.ROI_CONN, Cap.SKELETONS, Cap.MESHES,
-    Cap.SEGMENTATION, Cap.PROOFREADING, Cap.SOMAS, Cap.NEUROGLANCER,
+    Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.PROOFREADING, Cap.SOMAS, Cap.NEUROGLANCER,
     # Note: no Cap.L2CACHE. The `flywire_fafb_public` datastack genuinely has no
     # L2 cache (only production does) - the server says so, and declaring it here
     # would mean the skeleton fallback fails with an HTTP 500 instead of a clear

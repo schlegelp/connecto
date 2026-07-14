@@ -52,8 +52,17 @@ Defaults never raise; only an *explicit* request for something the dataset lacks
 does. Whole namespaces are absent rather than broken, so feature detection works:
 
 ```python
-hasattr(fw, "segmentation")   # True  — CAVE has a chunkedgraph
-hasattr(hb, "segmentation")   # False — neuPrint doesn't
+hasattr(fw, "proofreading")   # True  — FlyWire is still being edited
+hasattr(hb, "proofreading")   # False — hemibrain is frozen
+```
+
+And where a word means two things, there are two capabilities. Both FlyWire and
+hemibrain have a segmentation volume you can query; only FlyWire has a *chunkedgraph*
+underneath it, so only FlyWire's IDs can go stale:
+
+```python
+hb.segmentation.locs_to_segments(tbars)   # fine — what body is at this point?
+hb.segmentation.update_ids([1734350788])  # CapabilityError: no chunkedgraph
 ```
 
 ## Selecting neurons

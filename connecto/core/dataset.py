@@ -358,6 +358,34 @@ class Dataset(ABC):
     def _fetch_roi_mesh(self, roi: str):
         raise CapabilityError(f"{self.label} has no ROI meshes.")
 
+    # ------------------------------------------------------------------ volumes
+
+    # Where the segmentation and the EM image actually live. Two callers need this
+    # - cloud-volume (meshes, point lookups, cutouts) and neuroglancer - and they
+    # used to work it out separately. They drifted, as duplicated lookups do: the
+    # viz copy read `neuroglancerMeta[0]["dataInstance"]`, and entry 0 of that list
+    # is the *grayscale* layer, so it would have handed neuroglancer the string
+    # "grayscalejpeg" as a segmentation source. One resolver, asked by everyone.
+    #
+    # `format_for` is caveclient's vocabulary ("raw" | "neuroglancer" |
+    # "cave_explorer"); it decides whether the graphene URL carries the
+    # `middleauth+` prefix. Backends that have no such notion ignore it.
+
+    def _segmentation_source(self, *, format_for: str = "raw") -> str | None:
+        """This dataset's segmentation volume, or None if it has none."""
+        return self.spec.segmentation_source
+
+    def _graph_source(self) -> str:
+        """The chunkedgraph source. Only a chunkedgraph dataset has one."""
+        raise CapabilityError(
+            f"{self.label} ({self.backend_kind}) has no chunkedgraph - its "
+            f"segmentation is a flat volume."
+        )
+
+    def _image_source(self) -> str | None:
+        """This dataset's EM image volume, or None if it does not advertise one."""
+        return None
+
     # Column maps: backend-declared, consumed by connecto.core.schemas.
     _edge_colmap: dict = {}
     _synapse_colmap: dict = {}

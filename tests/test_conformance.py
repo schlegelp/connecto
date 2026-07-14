@@ -161,6 +161,53 @@ def test_the_l2_cache_actually_works_where_it_is_claimed(ds):
     assert (np.linalg.norm(dp[0].vect, axis=1) > 0).all()
 
 
+def test_the_segmentation_volume_holds_the_ids_the_dataset_talks_about(ds):
+    """`Cap.SEGMENTATION` claims two things at once: that there is a volume, and that
+    its values are *this dataset's* IDs. The second is the one that fails quietly.
+
+    A bucket can open perfectly and still be the wrong release, or be registered at the
+    wrong voxel size, and either way `locs_to_segments` returns plausible 64-bit
+    integers that are simply not the neuron you asked about. So the check is a
+    round-trip through the data: take a neuron's own T-bars - which sit *inside* it, by
+    definition - and require the volume to name that neuron.
+
+    (Skeleton nodes would not do. They are centrelines, and in fine neurites they cut
+    corners into the neighbouring body often enough - ~45% of the time on hemibrain -
+    that they cannot tell a coordinate bug from ordinary skeleton coarseness.)
+    """
+    if not (ds.supports(Cap.SEGMENTATION) and ds.supports(Cap.SYNAPSES)):
+        pytest.skip("no segmentation volume, or no synapses to probe it with")
+
+    x = int(ds.spec.example_ids[0])
+    syn = ds.connectivity.synapses(x)
+    pre = syn.loc[syn["pre"] == x, ["pre_x", "pre_y", "pre_z"]].to_numpy()
+    if len(pre) < 5:
+        pytest.skip(f"{ds.label}: example neuron has too few T-bars")
+
+    # Nanometres - which is what every connecto call returns, and what this one takes.
+    got = ds.segmentation.locs_to_segments(pre[:10], progress=False)
+
+    hits = int((got == x).sum())
+    assert hits >= 8, (
+        f"{ds.label}: only {hits}/10 of neuron {x}'s own T-bars land inside it "
+        f"(got {sorted(set(got.tolist()))[:4]}...). The segmentation volume and the "
+        f"database disagree - wrong release, or wrong voxel size."
+    )
+
+
+def test_a_flat_segmentation_does_not_pretend_to_be_a_chunkedgraph(ds):
+    """The whole point of splitting the capability. A frozen dataset must not offer
+    `update_ids`, and must not accept a `version=` it cannot honour."""
+    if not ds.supports(Cap.SEGMENTATION) or ds.supports(Cap.CHUNKEDGRAPH):
+        pytest.skip("not a flat-volume dataset")
+
+    x = list(ds.spec.example_ids[:1])
+    with pytest.raises(co.CapabilityError, match="chunkedgraph"):
+        ds.segmentation.update_ids(x)
+    with pytest.raises(co.CapabilityError, match="chunkedgraph"):
+        ds.segmentation.locs_to_supervoxels([[0, 0, 0]])
+
+
 def test_dotprops_can_be_asked_for_in_microns(ds):
     """NBLAST is calibrated in microns; nanometre dotprops score at the floor and look
     like "nothing matches" rather than like an error. Both routes must offer the unit."""

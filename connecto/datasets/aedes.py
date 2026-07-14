@@ -54,7 +54,8 @@ AEDES_SPEC = DatasetSpec(
             # No Cap.ANNOTATIONS - there is nothing to annotate with.
             # No Cap.SYNAPSE_SCORES - the synapse table has `size`, not a score.
             Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SKELETONS, Cap.MESHES,
-            Cap.L2CACHE, Cap.SEGMENTATION, Cap.SOMAS, Cap.NEUROGLANCER, Cap.LIVE,
+            Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.SOMAS,
+            Cap.NEUROGLANCER, Cap.LIVE,
         }
     ),
     # Two heavily-connected neurons, unchanged across every live materialization.

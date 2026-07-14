@@ -10,14 +10,28 @@ __all__ = [
     "Hemibrain", "MaleCNS", "MANC", "OpticLobe", "Fish2",
 ]
 
-# What every neuPrint dataset can do. Body IDs are immutable, so there is no
-# segmentation, no proofreading history and no live query.
+# What every neuPrint dataset can do. Body IDs are immutable: they are frozen at
+# publication and nobody is proofreading them any more. So there is no chunkedgraph,
+# no edit history and no live query.
+#
+# There *is* a segmentation, though - a flat `precomputed://` volume, which
+# cloud-volume reads as happily as it reads a graphene one. What you cannot do is
+# ask it for supervoxels or `update_ids`; what you can do is ask it what body sits
+# at a point. Hence Cap.SEGMENTATION without Cap.CHUNKEDGRAPH - see `Cap` for why
+# those are two capabilities and not one.
 _NEUPRINT_CAPS = frozenset(
     {
         Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SYNAPSE_SCORES,
         Cap.ROI_CONN, Cap.ROIS, Cap.SKELETONS, Cap.MESHES, Cap.SOMAS,
     }
 )
+
+# Only add SEGMENTATION where we have actually verified a public volume: opened it
+# with cloud-volume, and checked that a body's T-bars land back inside that body, so
+# the volume's IDs really are the neuPrint body IDs. The alternative - assuming the
+# obvious bucket name - is how you end up promising a segmentation that 404s, or one
+# whose IDs belong to a different release.
+_NEUPRINT_SEG_CAPS = _NEUPRINT_CAPS | {Cap.SEGMENTATION}
 
 # Janelia's side vocabularies. hemibrain/maleCNS use L/R/M; MANC uses LHS/RHS.
 _LRM = {"L": "left", "R": "right", "M": "center", "C": "center"}
@@ -44,9 +58,13 @@ HEMIBRAIN = DatasetSpec(
     side_map=_LRM,
     voxel_size=(8, 8, 8),
     template_space="JRCFIB2018Fraw",
+    # Also the one dataset that advertises its volume in `neuroglancerMeta`, so
+    # this is belt and braces - but pinning it means we do not depend on the
+    # server keeping that field populated.
+    segmentation_source="precomputed://gs://neuroglancer-janelia-flyem-hemibrain/v1.2/segmentation",
     # No `class` and no predicted transmitters in v1.2.1 - so they are simply
     # absent from the frame rather than present-and-empty.
-    capabilities=_NEUPRINT_CAPS,
+    capabilities=_NEUPRINT_SEG_CAPS,
     example_ids=(1734350788, 1734350908),  # two DA1 lPNs
 )
 
@@ -74,7 +92,8 @@ MALECNS = DatasetSpec(
     side_map=_LRM,
     voxel_size=(8, 8, 8),
     template_space="JRCFIB2022Mraw",
-    capabilities=_NEUPRINT_CAPS,
+    segmentation_source="precomputed://gs://flyem-male-cns/v1.0/segmentation",
+    capabilities=_NEUPRINT_SEG_CAPS,
     example_ids=(10001, 10002),
 )
 
@@ -97,7 +116,11 @@ MANC_SPEC = DatasetSpec(
     side_map=_LHS,
     voxel_size=(8, 8, 8),
     template_space="JRCVNC2018M",
-    capabilities=_NEUPRINT_CAPS,
+    # The neuPrint DB is v1.2.3 and the volume is v1.2. That is not a version
+    # mismatch - v1.2.3 is a database revision on the same segmentation - and the
+    # T-bar check confirms it: MDN's synapses land in MDN.
+    segmentation_source="precomputed://gs://manc-seg-v1p2/manc-seg-v1.2",
+    capabilities=_NEUPRINT_SEG_CAPS,
     example_ids=(13438, 13809),  # two MDNs (moonwalker descending neurons)
 )
 
@@ -121,7 +144,8 @@ OPTIC_LOBE = DatasetSpec(
     derive={"side_from_instance": ("instance", r"_([LRM])$")},
     side_map=_LRM,
     voxel_size=(8, 8, 8),
-    capabilities=_NEUPRINT_CAPS,
+    segmentation_source="precomputed://gs://flyem-optic-lobe/v1.1/segmentation",
+    capabilities=_NEUPRINT_SEG_CAPS,
     example_ids=(41566, 43090),  # two Tm1
 )
 
@@ -140,6 +164,11 @@ FISH2 = DatasetSpec(
     },
     side_map=_LRM,
     voxel_size=(16, 16, 15),
+    # No SEGMENTATION: fish2 has no public segmentation volume that we could find.
+    # The server does not populate `neuroglancerMeta`, its API is entirely behind a
+    # login, no paper cites it, and none of the plausible buckets exist. So connecto
+    # says it has no segmentation - which is the honest answer, and a better one than
+    # a guessed URL that 404s at the first lookup.
     capabilities=_NEUPRINT_CAPS,
     example_ids=(100000001, 100000123),
 )

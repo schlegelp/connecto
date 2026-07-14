@@ -23,13 +23,13 @@ from ...core.namespaces import (
     Somas,
     Viz,
 )
+from ...core.segmentation import Segmentation
 from ...core.spec import Cap
 from ...core.version import Version
 from ...exceptions import CapabilityError
 from . import versions as _versions
 from .l2 import L2
 from .proofreading import Proofreading
-from .segmentation import Segmentation
 
 logger = logging.getLogger("connecto")
 
@@ -64,6 +64,30 @@ class CAVEDataset(Dataset):
 
     # CAVE hands back nanometres because we ask for them (desired_resolution).
     _raw_position_units = "nm"
+
+    # ------------------------------------------------------------------ volumes
+
+    def _segmentation_source(self, *, format_for: str = "raw") -> str | None:
+        """The volume to read and display."""
+        # The spec may override this, and FlyWire does: with the *flat* v783 bucket,
+        # which needs no CAVE login and is exactly what the public release is. That
+        # is the right volume for meshes and for neuroglancer. It is the wrong one
+        # for supervoxels - see `_graph_source`.
+        if self.spec.segmentation_source is not None:
+            return self.spec.segmentation_source
+        # `middleauth+` is not decoration: it tells a modern viewer to run CAVE's
+        # login flow, and a protected datastack will not load without it. caveclient
+        # knows which format wants it, so ask rather than splice the prefix on here.
+        return self.client.info.segmentation_source(format_for=format_for)
+
+    def _graph_source(self) -> str:
+        """The chunkedgraph, always - never the spec's display volume."""
+        return self.client.info.segmentation_source()
+
+    def _image_source(self) -> str | None:
+        # `image_source(format_for=...)` returns None for the viewer formats -
+        # caveclient only maps the image for "raw"/"cloudvolume".
+        return self.client.info.image_source(format_for="raw")
 
     _edge_colmap = {"pre": "pre_pt_root_id", "post": "post_pt_root_id", "weight": "n_syn", "roi": "neuropil"}
     _SYNAPSE_COLMAP = {

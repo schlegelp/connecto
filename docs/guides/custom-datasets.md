@@ -97,7 +97,7 @@ SPEC = DatasetSpec(
     voxel_size=(18, 18, 45),
     capabilities=frozenset({
         Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES,
-        Cap.SKELETONS, Cap.MESHES, Cap.SEGMENTATION, Cap.SOMAS,
+        Cap.SKELETONS, Cap.MESHES, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.SOMAS,
     }),
     example_ids=(648518346448625630,),             # <- do not skip this
 )

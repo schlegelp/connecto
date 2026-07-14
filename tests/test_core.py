@@ -150,7 +150,16 @@ def test_capability_matrix_covers_every_dataset():
     assert not m.loc["microns", "nt_per_synapse"]
     assert not m.loc["flywire", "live"]  # frozen public release
     assert m.loc["flywire-production", "live"]
-    assert not m.loc["hemibrain", "segmentation"]  # no chunkedgraph on neuPrint
+
+    # hemibrain has a segmentation volume (a flat precomputed bucket) but no
+    # chunkedgraph under it - its body IDs are frozen. Two capabilities, because
+    # collapsing them would force us to lie about one or the other.
+    assert m.loc["hemibrain", "segmentation"]
+    assert not m.loc["hemibrain", "chunkedgraph"]
+    assert m.loc["flywire", "segmentation"] and m.loc["flywire", "chunkedgraph"]
+
+    # fish2 publishes no volume we could verify, so it claims none.
+    assert not m.loc["fish2", "segmentation"]
 
 
 def test_backend_and_dataset_are_orthogonal():

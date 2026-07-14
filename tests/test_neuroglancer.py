@@ -93,6 +93,16 @@ class _StubDS:
     name = "stub"
     label = "Stub dataset"
 
+    # Mirrors CAVEDataset: the spec may override the volume, otherwise ask caveclient -
+    # which is what decides whether the graphene URL carries `middleauth+`.
+    def _segmentation_source(self, *, format_for: str = "raw"):
+        if self.spec.segmentation_source is not None:
+            return self.spec.segmentation_source
+        return self.client.info.segmentation_source(format_for=format_for)
+
+    def _image_source(self):
+        return self.client.info.image_source(format_for="raw")
+
 
 @pytest.fixture
 def modern():

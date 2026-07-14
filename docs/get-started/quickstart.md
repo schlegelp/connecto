@@ -149,8 +149,16 @@ something the dataset lacks does.
 Whole namespaces are absent rather than broken, so you can check first:
 
 ```python
-hasattr(fw, "segmentation")   # True  - CAVE has a chunkedgraph
-hasattr(hb, "segmentation")   # False - neuPrint doesn't
+hasattr(fw, "proofreading")   # True  - FlyWire is still being edited
+hasattr(hb, "proofreading")   # False - hemibrain is frozen
+```
+
+Where one word covers two promises, connecto splits it. Both datasets have a
+segmentation volume; only FlyWire has a chunkedgraph under it:
+
+```python
+hb.segmentation.locs_to_segments(tbars)   # fine - what body is at this point?
+hb.segmentation.update_ids([1734350788])  # CapabilityError: no chunkedgraph
 ```
 
 ## Where to go next

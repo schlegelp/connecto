@@ -2,29 +2,9 @@
 
 from __future__ import annotations
 
-from ...exceptions import MissingDependencyError
+from ...core.volume import get_cloudvolume
 
-__all__ = ["fetch_meshes", "get_cloudvolume"]
-
-_VOLUMES: dict = {}
-
-
-def get_cloudvolume(ds):
-    """A CloudVolume onto this dataset's segmentation (cached)."""
-    try:
-        import cloudvolume as cv
-    except ModuleNotFoundError as e:
-        raise MissingDependencyError.for_extra(
-            "cloud-volume", "points", "Fetching meshes"
-        ) from e
-
-    key = ds.source
-    if key not in _VOLUMES:
-        source = ds.spec.segmentation_source or ds.client.info.segmentation_source()
-        _VOLUMES[key] = cv.CloudVolume(
-            source, use_https=True, progress=False, fill_missing=True
-        )
-    return _VOLUMES[key]
+__all__ = ["fetch_meshes"]
 
 
 def fetch_meshes(ds, ids, version, *, lod=None, progress: bool = True, **opts):

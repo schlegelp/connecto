@@ -31,7 +31,6 @@ dependencies = [
 [project.optional-dependencies]
 clio = ["clio-py"]
 flytable = ["sea-serpent"]
-points = ["pathos>=0.3.3"]  # parallel point -> segment lookups
 # ruff >=0.15: older versions still enable the deprecated UP038 via the `UP` prefix,
 # which flags every isinstance(x, (int, np.integer)) in the codebase. Ruff deprecated
 # that rule because the `X | Y` form it suggests is slower and not recommended.

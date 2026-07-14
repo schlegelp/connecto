@@ -49,7 +49,26 @@ class Cap(str, Enum):
     SKELETONS = "skeletons"
     MESHES = "meshes"
     L2CACHE = "l2cache"
-    SEGMENTATION = "segmentation"  # chunkedgraph / ID operations (CAVE)
+
+    # Two capabilities, because there are two different things people mean by
+    # "segmentation", and a dataset can have the first without the second.
+    #
+    # SEGMENTATION: there is a segmentation *volume* you can query - "what body is
+    # at this point", "give me the voxels of this body". Every CAVE dataset has one
+    # (graphene), and so does every published neuPrint dataset (a flat precomputed
+    # volume, advertised in `Client.meta`). It just needs cloud-volume.
+    #
+    # CHUNKEDGRAPH: the volume is a *proofreadable graph* - supervoxels underneath
+    # root IDs, root IDs that change when someone makes an edit, and therefore
+    # `update_ids`, `is_latest_root`, edit history. CAVE only.
+    #
+    # Collapsing the two would mean either denying that hemibrain has a
+    # segmentation (it does) or promising `update_ids` on a dataset whose IDs are
+    # immutable and have no supervoxels beneath them (it isn't). Both are lies, so:
+    # two capabilities.
+    SEGMENTATION = "segmentation"  # a queryable segmentation volume
+    CHUNKEDGRAPH = "chunkedgraph"  # supervoxels, root-ID history, update_ids (CAVE)
+
     PROOFREADING = "proofreading"  # edit history, proofreading status (CAVE)
     SOMAS = "somas"
     LIVE = "live"  # non-materialized "right now" queries

@@ -19,7 +19,7 @@ The handle: versions, capabilities, `ids()`, `at()`. Plus the dataset constructo
 ### [Namespaces](namespaces.md)
 
 `ds.annotations`, `ds.connectivity`, `ds.skeletons`, `ds.meshes`, `ds.rois`,
-`ds.somas`, `ds.segmentation`, `ds.proofreading`.
+`ds.somas`, `ds.viz`, `ds.segmentation`, `ds.proofreading`.
 
 </div>
 
@@ -75,8 +75,12 @@ ds.rois.list()                ds.rois.hierarchy()           ds.rois.mesh(roi)
 ds.somas.get(x)
 ds.viz.scene(x)               ds.viz.neuroglancer_url(x, color_by="type")
 
-# CAVE only
-ds.segmentation.update_ids(x)        ds.segmentation.locs_to_segments(locs)
+# wherever there is a segmentation volume - CAVE *and* neuPrint
+ds.segmentation.locs_to_segments(locs)   ds.segmentation.neuron_to_segments(n)
+ds.segmentation.get_voxels(x)            ds.segmentation.get_segmentation_cutout(bbox)
+
+# CAVE only (a chunkedgraph: supervoxels, and IDs that change)
+ds.segmentation.update_ids(x)        ds.segmentation.locs_to_supervoxels(locs)
 ds.proofreading.is_proofread(x)      ds.proofreading.edit_history(x)
 
 # CAVE, and only where the datastack has an L2 cache
