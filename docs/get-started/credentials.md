@@ -73,7 +73,7 @@ cn.auth_status(validate=False)   # instant, presence-only
 
 === "neuPrint"
 
-    hemibrain, maleCNS, MANC, optic-lobe, fish2.
+    hemibrain, maleCNS, MANC, fish2 — and, by default, FlyWire and BANC.
 
     1. Log in at <https://neuprint.janelia.org/> and copy your token from the
        account menu.

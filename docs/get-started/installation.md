@@ -65,17 +65,21 @@ cn.list_datasets()
 ```
 
 ```
-                 name                          label                  species        backends                     annotations
-0                banc    BANC (brain and nerve cord)  Drosophila melanogaster  cave, neuprint                  cave, flytable
-1               fish2       fish2 (larval zebrafish)              Danio rerio        neuprint                        neuprint
-2             flywire  FlyWire (FAFB) public release  Drosophila melanogaster  cave, neuprint                public, flytable
-3  flywire-production      FlyWire (FAFB) production  Drosophila melanogaster            cave                public, flytable
-4           hemibrain                      hemibrain  Drosophila melanogaster        neuprint                        neuprint
-5             malecns                       male CNS  Drosophila melanogaster        neuprint                  neuprint, clio
-6                manc                MANC (male VNC)  Drosophila melanogaster        neuprint                        neuprint
-7             microns      MICrONS (minnie65) public             Mus musculus            cave  celltypes, mtypes, nucleus_svm
-8          optic-lobe                     optic lobe  Drosophila melanogaster        neuprint                        neuprint
+                 name                          label                  species        backends                     annotations  public
+0               aedes         Aedes (mosquito brain)            Aedes aegypti            cave                        flytable   False
+1                banc    BANC (brain and nerve cord)  Drosophila melanogaster  neuprint, cave                  cave, flytable    True
+2                fanc              FANC (female VNC)  Drosophila melanogaster            cave                            cave   False
+3               fish2       fish2 (larval zebrafish)              Danio rerio        neuprint                        neuprint   False
+4             flywire  FlyWire (FAFB) public release  Drosophila melanogaster  neuprint, cave                public, flytable    True
+5  flywire-production      FlyWire (FAFB) production  Drosophila melanogaster            cave                public, flytable   False
+6           hemibrain                      hemibrain  Drosophila melanogaster        neuprint                        neuprint    True
+7             malecns                       male CNS  Drosophila melanogaster        neuprint                  neuprint, clio    True
+8                manc                MANC (male VNC)  Drosophila melanogaster        neuprint                        neuprint    True
+9             microns      MICrONS (minnie65) public             Mus musculus            cave  celltypes, mtypes, nucleus_svm    True
 ```
+
+The first backend listed is the default. `public=False` does not mean secret — it means a
+fresh token will not get you in, and `cn.get_spec(name).access` says what will.
 
 That call is offline — it only reads the registry. To actually *query* anything you
 need tokens, which is the [next page](credentials.md).

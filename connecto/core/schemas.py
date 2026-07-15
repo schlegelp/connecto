@@ -125,15 +125,20 @@ def _order(df: pd.DataFrame, first: list[str]) -> pd.DataFrame:
     return df[lead + rest]
 
 
-def _rescale(df, prefixes, ds, units: str):
+def _rescale(df, prefixes, ds, units: str, have: str | None = None):
     """Get positions into the requested units.
 
     Units are nanometres everywhere in connecto unless the caller says otherwise.
     ``voxel_size`` lives on the spec, and each backend declares what *it* returns
     (CAVE asks for nm outright via ``desired_resolution``; neuPrint hands back
     voxels), so no user ever has to think about this again.
+
+    ``have`` overrides the backend's declaration, for the case where the frame did
+    not come from the backend at all. A precomputed skeleton bucket is plain HTTPS
+    and hands back nanometres no matter who fetched it - so run it through the
+    neuPrint backend's ``voxel`` default and every coordinate is 4-40x too big.
     """
-    have = getattr(ds, "_raw_position_units", "voxel")
+    have = have or getattr(ds, "_raw_position_units", "voxel")
     if have == units or ds.spec.voxel_size is None:
         return df
 
@@ -332,7 +337,12 @@ def normalize_annotations(
 
 
 def normalize_skeleton(
-    raw: pd.DataFrame, ds, *, colmap: dict[str, str], units: str = "nm"
+    raw: pd.DataFrame,
+    ds,
+    *,
+    colmap: dict[str, str],
+    units: str = "nm",
+    source_units: str | None = None,
 ) -> pd.DataFrame:
     """Normalize skeleton nodes into navis' ``TreeNeuron.nodes`` layout."""
     df = _consume(raw.copy(), colmap)
@@ -344,7 +354,7 @@ def normalize_skeleton(
         )
         df.loc[df["parent_id"] == 0, "parent_id"] = -1
 
-    df = _rescale(df, ("",), ds, units)
+    df = _rescale(df, ("",), ds, units, have=source_units)
 
     if "radius" not in df.columns:
         df["radius"] = -1.0

@@ -583,5 +583,5 @@ def upstream_errors(service: str, *, server=None, resource=None, dataset=None):
     else, so the 5xx falls through to the outer handler untouched.
     """
     with server_errors(service, server=server, resource=resource, dataset=dataset):
-        with auth_errors(service, server=server, resource=resource):
+        with auth_errors(service, server=server, resource=resource, dataset=dataset):
             yield

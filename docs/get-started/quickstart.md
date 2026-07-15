@@ -7,9 +7,14 @@ Ten minutes, end to end. Every output on this page is copied from a real run.
 ```python
 import connecto as cn
 
-fw = cn.FlyWire()      # CAVE     - FlyWire (FAFB) public release
+fw = cn.FlyWire()      # neuPrint - FlyWire (FAFB) public release
 hb = cn.Hemibrain()    # neuPrint - hemibrain
 ```
+
+FlyWire is served by *both* backends, and neuPrint is the default — it is the same
+release, and it answers faster. Pass `backend="cave"` for the chunkedgraph, proofreading
+and per-synapse transmitters, which the neuPrint mirror does not have. connecto will tell
+you when you need it.
 
 A dataset is an immutable **handle**. It holds no neurons, no selection, no cached
 frame of annotations — just "which connectome, which backend, which version".
@@ -149,8 +154,8 @@ something the dataset lacks does.
 Whole namespaces are absent rather than broken, so you can check first:
 
 ```python
-hasattr(fw, "proofreading")   # True  - FlyWire is still being edited
-hasattr(hb, "proofreading")   # False - hemibrain is frozen
+hasattr(cn.FlyWire(backend="cave"), "proofreading")   # True  - FlyWire is still edited
+hasattr(hb, "proofreading")                           # False - hemibrain is frozen
 ```
 
 Where one word covers two promises, connecto splits it. Both datasets have a
@@ -159,6 +164,20 @@ segmentation volume; only FlyWire has a chunkedgraph under it:
 ```python
 hb.segmentation.locs_to_segments(tbars)   # fine - what body is at this point?
 hb.segmentation.update_ids([1734350788])  # CapabilityError: no chunkedgraph
+```
+
+And a capability belongs to a *(dataset, backend)* pair, not to a dataset — so the same
+FlyWire has a chunkedgraph through one door and not the other, and the error says which:
+
+```python
+cn.FlyWire().segmentation.update_ids(old_ids)
+```
+
+```
+CapabilityError: FlyWire (FAFB) public release (neuprint) does not support
+chunkedgraph. Available: annotations, connectivity, meshes, neuroglancer,
+roi_connectivity, rois, segmentation, skeletons, somas, synapse_scores, synapses.
+The cave backend does: cn.get_dataset("flywire", backend="cave").
 ```
 
 ## Where to go next

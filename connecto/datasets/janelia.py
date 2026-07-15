@@ -1,13 +1,19 @@
-"""The neuPrint datasets: hemibrain, maleCNS, MANC, optic-lobe, fish2."""
+"""The neuPrint datasets: hemibrain, maleCNS, MANC, fish2.
+
+No `optic-lobe`. It was a partial release - the optic lobes of the same specimen
+that `malecns` now covers whole - so it was two names for one dataset, and the
+narrower one could only ever give you fewer neurons and a different set of body
+IDs for them. Use `malecns` and select the optic-lobe ROIs.
+"""
 
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec
+from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec, Publication
 
 __all__ = [
-    "HEMIBRAIN", "MALECNS", "MANC_SPEC", "OPTIC_LOBE", "FISH2",
-    "Hemibrain", "MaleCNS", "MANC", "OpticLobe", "Fish2",
+    "HEMIBRAIN", "MALECNS", "MANC_SPEC", "FISH2",
+    "Hemibrain", "MaleCNS", "MANC", "Fish2",
 ]
 
 # What every neuPrint dataset can do. Body IDs are immutable: they are frozen at
@@ -44,6 +50,32 @@ HEMIBRAIN = DatasetSpec(
     name="hemibrain",
     label="hemibrain",
     species="Drosophila melanogaster",
+    description=(
+        "Dense FIB-SEM reconstruction of much of the central brain of a female "
+        "Drosophila - one hemisphere, cropped, and no optic lobes. ~25,000 typed "
+        "neurons and ~20M synapses. The dataset most published fly connectomics "
+        "was built on, and still the reference against which new ones are matched."
+    ),
+    publications=(
+        Publication(
+            authors="Scheffer LK, Xu CS, Januszewski M, Lu Z, et al.",
+            year=2020,
+            title="A connectome and analysis of the adult Drosophila central brain",
+            journal="eLife",
+            doi="10.7554/eLife.57443",
+        ),
+        Publication(
+            authors="Xu CS, Hayworth KJ, Lu Z, Grob P, et al.",
+            year=2017,
+            title="Enhanced FIB-SEM systems for large-volume 3D imaging",
+            journal="eLife",
+            doi="10.7554/eLife.25916",
+        ),
+    ),
+    links={
+        "website": "https://www.janelia.org/project-team/flyem/hemibrain",
+        "neuprint": "https://neuprint.janelia.org/?dataset=hemibrain:v1.2.1",
+    },
     backends=(BackendSpec("neuprint", "neuprint.janelia.org/hemibrain:v1.2.1"),),
     annotation_sources=(_NP,),
     fields={
@@ -72,6 +104,31 @@ MALECNS = DatasetSpec(
     name="malecns",
     label="male CNS",
     species="Drosophila melanogaster",
+    description=(
+        "The complete central nervous system - brain and ventral nerve cord - of a "
+        "male Drosophila: 166,691 neurons in 11,691 cell types, annotated with "
+        "fruitless/doublesex expression. The counterpart that makes synapse-resolution "
+        "male-vs-female comparison possible, and it subsumes the old `optic-lobe` "
+        "release, which was these optic lobes on their own."
+    ),
+    publications=(
+        Publication(
+            authors="Berg S, Beckett IR, Costa M, Schlegel P, et al.",
+            year=2025,
+            title=(
+                "Sexual dimorphism in the complete connectome of the Drosophila male "
+                "central nervous system"
+            ),
+            journal="bioRxiv",  # still a preprint - there is no journal version yet
+            doi="10.1101/2025.10.09.680999",
+        ),
+    ),
+    links={
+        "website": "https://male-cns.janelia.org/",
+        "neuprint": "https://neuprint.janelia.org/?dataset=male-cns:v1.0",
+        "clio": "https://clio.janelia.org/",
+        "data": "https://male-cns.janelia.org/download/",
+    },
     backends=(BackendSpec("neuprint", "neuprint-cns.janelia.org/male-cns:v1.0"),),
     annotation_sources=(
         _NP,
@@ -98,12 +155,51 @@ MALECNS = DatasetSpec(
 )
 
 # Named MANC_SPEC, not MANC, so the *factory* below can be `MANC` - an acronym has
-# no CamelCase form to fall back on, unlike Hemibrain/OpticLobe. Same convention as
+# no CamelCase form to fall back on, unlike Hemibrain/MaleCNS. Same convention as
 # BANC_SPEC and MICRONS_SPEC.
 MANC_SPEC = DatasetSpec(
     name="manc",
     label="MANC (male VNC)",
     species="Drosophila melanogaster",
+    description=(
+        "Dense FIB-SEM connectome of the complete ventral nerve cord of an adult male "
+        "Drosophila (~23,000 neurons), with motor neurons, descending and ascending "
+        "neurons, hemilineages and predicted transmitters. The male counterpart to "
+        "the CAVE-backed `fanc`."
+    ),
+    publications=(
+        Publication(
+            authors="Takemura S, Hayworth KJ, Huang GB, Januszewski M, et al.",
+            year=2024,
+            title="A connectome of the male Drosophila ventral nerve cord",
+            journal="eLife",
+            doi="10.7554/eLife.97769",
+        ),
+        Publication(
+            authors="Marin EC, Morris BJ, Stürner T, Champion AS, et al.",
+            year=2024,
+            title=(
+                "Systematic annotation of a complete adult male Drosophila nerve cord "
+                "connectome reveals principles of functional organisation"
+            ),
+            journal="eLife",
+            doi="10.7554/eLife.97766",
+        ),
+        Publication(
+            authors="Cheong HS, Eichler K, Stürner T, Asinof SK, et al.",
+            year=2025,
+            title=(
+                "Transforming descending input into motor output: an analysis of the "
+                "Drosophila Male Adult Nerve Cord connectome"
+            ),
+            journal="eLife",
+            doi="10.7554/eLife.96084",
+        ),
+    ),
+    links={
+        "website": "https://www.janelia.org/project-team/flyem/manc-connectome",
+        "neuprint": "https://neuprint.janelia.org/?dataset=manc:v1.2.3",
+    },
     backends=(BackendSpec("neuprint", "neuprint.janelia.org/manc:v1.2.3"),),
     annotation_sources=(_NP,),
     fields={
@@ -124,35 +220,28 @@ MANC_SPEC = DatasetSpec(
     example_ids=(13438, 13809),  # two MDNs (moonwalker descending neurons)
 )
 
-OPTIC_LOBE = DatasetSpec(
-    name="optic-lobe",
-    label="optic lobe",
-    species="Drosophila melanogaster",
-    backends=(BackendSpec("neuprint", "neuprint.janelia.org/optic-lobe:v1.1"),),
-    annotation_sources=(_NP,),
-    fields={
-        "type": ("type", "instance"),
-        # optic-lobe:v1.1 has neither `somaSide` nor `class` - side lives as a
-        # suffix on the instance ("Tm1_R"), exactly as in hemibrain, so we dig it
-        # out the same way. Declaring `somaSide` here would not corrupt anything
-        # (a missing source column drops the canonical column rather than
-        # inventing an all-null one) - it would just silently mean *no side*.
-        "side": ("side_from_instance",),
-        "nt": ("consensusNt", "predictedNt"),
-        "status": ("status", "statusLabel"),
-    },
-    derive={"side_from_instance": ("instance", r"_([LRM])$")},
-    side_map=_LRM,
-    voxel_size=(8, 8, 8),
-    segmentation_source="precomputed://gs://flyem-optic-lobe/v1.1/segmentation",
-    capabilities=_NEUPRINT_SEG_CAPS,
-    example_ids=(41566, 43090),  # two Tm1
-)
-
 FISH2 = DatasetSpec(
     name="fish2",
     label="fish2 (larval zebrafish)",
     species="Danio rerio",
+    description=(
+        "A larval zebrafish connectome, served on its own Janelia neuPrint deployment. "
+        "It is the one dataset here with no publication to point at: no paper, no "
+        "preprint, no project page names it. So connecto describes it and cites "
+        "nothing, rather than attaching someone else's fish paper to it."
+    ),
+    # Deliberately empty. There is a published larval zebrafish connectome (Petkova et
+    # al. 2025, "fish1") and a forthcoming Janelia/Google one, and it would be easy to
+    # cite either - but nothing links them to *this* server, and a citation that is
+    # merely plausible is worse than none: it would be wrong in a methods section.
+    publications=(),
+    links={"neuprint": "https://neuprint-fish2.janelia.org/"},
+    public=False,
+    access=(
+        "Its own neuPrint deployment (neuprint-fish2.janelia.org), which issues its "
+        "own tokens - a token for neuprint.janelia.org is *not* valid here. Access "
+        "appears to be granted per account; ask Janelia."
+    ),
     # Note: no version suffix. Nothing in connecto may assume `name:vX.Y`.
     backends=(BackendSpec("neuprint", "neuprint-fish2.janelia.org/fish2"),),
     annotation_sources=(_NP,),
@@ -173,7 +262,7 @@ FISH2 = DatasetSpec(
     example_ids=(100000001, 100000123),
 )
 
-for _spec in (HEMIBRAIN, MALECNS, MANC_SPEC, OPTIC_LOBE, FISH2):
+for _spec in (HEMIBRAIN, MALECNS, MANC_SPEC, FISH2):
     register(_spec)
 
 
@@ -191,5 +280,4 @@ def _factory(spec):
 Hemibrain = _factory(HEMIBRAIN)
 MaleCNS = _factory(MALECNS)
 MANC = _factory(MANC_SPEC)
-OpticLobe = _factory(OPTIC_LOBE)
 Fish2 = _factory(FISH2)

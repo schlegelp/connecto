@@ -56,7 +56,7 @@ from .core import (  # noqa: E402
     list_datasets,
     register,
 )
-from .core.spec import AnnotationSource, BackendSpec  # noqa: E402
+from .core.spec import AnnotationSource, BackendSpec, Publication  # noqa: E402
 from .datasets import (  # noqa: E402
     BANC,
     CAVE,
@@ -69,7 +69,6 @@ from .datasets import (  # noqa: E402
     MaleCNS,
     MICrONS,
     NeuPrint,
-    OpticLobe,
 )
 from .exceptions import (  # noqa: E402
     AmbiguousVersionError,
@@ -86,12 +85,12 @@ from .servers import server_status, wait_until_available  # noqa: E402
 __all__ = [
     # datasets
     "Aedes", "BANC", "CAVE", "FANC", "Fish2", "FlyWire", "Hemibrain", "MANC",
-    "MICrONS", "MaleCNS", "NeuPrint", "OpticLobe",
+    "MICrONS", "MaleCNS", "NeuPrint",
     # registry
     "capability_matrix", "get_dataset", "get_spec", "list_datasets", "register",
     # building blocks
     "AnnotationSource", "BackendSpec", "Cap", "Dataset", "DatasetSpec",
-    "NeuronCriteria", "Version",
+    "NeuronCriteria", "Publication", "Version",
     # auth, cache & viz
     "auth_status", "cache", "get_token", "set_token", "viz",
     # servers

@@ -1,9 +1,16 @@
 """The conformance suite.
 
 One file that runs the *same* assertions against *every* registered dataset. This
-is the highest-leverage test in the project: it is what keeps eleven datasets and two
+is the highest-leverage test in the project: it is what keeps ten datasets and two
 backends honest, and `test_capabilities_are_honest` is the executable form of the
 "nothing degrades silently" promise.
+
+It runs per **door**, not per dataset: `flywire` and `banc` are each served by both
+backends, and the two are not equally capable - neuPrint adds ROIs and takes away the
+chunkedgraph - so a suite that only exercised the default backend would leave half of
+each dataset's promises unchecked. That is not hypothetical: the neuPrint-backed FlyWire
+claimed per-synapse transmitters it does not have, and returned a frame without them
+rather than raising. Nothing tested it, because nothing built it.
 
 Needs network and credentials::
 
@@ -22,8 +29,10 @@ from connecto.core.spec import Cap
 
 pytestmark = pytest.mark.network
 
-# Every dataset that has declared example neurons to test against.
-TESTABLE = [s for s in REGISTRY.values() if s.example_ids]
+# Every (dataset, backend) pair that has declared example neurons to test against.
+TESTABLE = [
+    (s, b.kind) for s in REGISTRY.values() if s.example_ids for b in s.backends
+]
 
 
 def _build(spec, backend=None):
@@ -32,9 +41,10 @@ def _build(spec, backend=None):
     return build(spec, backend=backend)
 
 
-@pytest.fixture(scope="module", params=TESTABLE, ids=lambda s: s.name)
+@pytest.fixture(scope="module", params=TESTABLE, ids=lambda p: f"{p[0].name}-{p[1]}")
 def ds(request):
-    return _build(request.param)
+    spec, backend = request.param
+    return _build(spec, backend=backend)
 
 
 # ------------------------------------------------------------------- the schemas
@@ -318,6 +328,46 @@ def test_banc_backends_agree():
     neuprint = neuprint.sort_values(["pre", "post"]).reset_index(drop=True)
 
     pd.testing.assert_frame_equal(cave, neuprint, check_like=True)
+
+
+@pytest.mark.parametrize("name", ["banc", "flywire"])
+def test_the_neuprint_doors_synapses_land_in_the_cave_doors_volume(name):
+    """One door's coordinates, the other door's segmentation. They must agree.
+
+    Edges agreeing is not enough, because *coordinates* can be wrong on their own -
+    and they were. The neuPrint mirrors of FlyWire and BANC were imported from CAVE
+    and kept its nanometres, unlike every Janelia FIB-SEM dataset on neuPrint, which
+    reports 8 nm voxels. connecto took the backend's usual word for it and multiplied
+    by `voxel_size` again, so every synapse position came back 4-45x out - while the
+    edges, the IDs and the weights all stayed perfectly correct. That is the shape of
+    bug that reaches publication.
+
+    Comparing the two doors' coordinates directly is not the test to write: they return
+    genuinely different *sets* of synapses (different tables, different thresholds), so
+    any extremum is dominated by whichever outlier one of them happens to include. This
+    asks the physical question instead - is the T-bar inside the neuron? - and it is
+    only askable because backend and dataset are orthogonal: BANC's neuPrint door has
+    no segmentation volume, but BANC does, and it is one `backend="cave"` away.
+
+    A pre-synapse is inside its own body by definition. Get the units wrong and the
+    points land in another neuron, in empty space, or outside the volume entirely.
+    """
+    spec = co.get_spec(name)
+    x = int(spec.example_ids[0])
+
+    syn = _build(spec, backend="neuprint").connectivity.synapses(x)
+    tbars = syn.loc[syn["pre"] == x, ["pre_x", "pre_y", "pre_z"]].to_numpy()[:10]
+    assert len(tbars) >= 5, "not enough T-bars to be worth testing"
+
+    segs = _build(spec, backend="cave").segmentation.locs_to_segments(
+        tbars, progress=False
+    )
+    hits = int((segs == x).sum())
+    assert hits >= 8, (
+        f"{name}: only {hits}/{len(tbars)} of the neuPrint door's T-bars land inside "
+        f"the neuron they belong to, per the CAVE door's segmentation. The positions "
+        f"are in the wrong units.\n  T-bars (nm): {tbars[:3].tolist()}\n  got: {segs[:3]}"
+    )
 
 
 def test_autapses_are_opt_in_not_a_backend_accident():

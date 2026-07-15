@@ -3,7 +3,7 @@
 Three possible sources, in order of preference:
 
 1. **Precomputed neuroglancer skeletons**, if the dataset publishes them
-   (``BackendSpec.skeleton_source``). FlyWire does, one bucket per materialization.
+   (``DatasetSpec.skeleton_source``). FlyWire does, one bucket per materialization.
 2. CAVE's **skeleton service** (``client.skeleton``). Post-dates fafbseg, which is
    why fafbseg doesn't use it. Note it *requires an L2 cache* - so it is not
    available for every datastack even when ``get_versions()`` cheerfully answers.
@@ -22,26 +22,19 @@ import numpy as np
 import pandas as pd
 
 from ...core.spec import Cap
+from ...core.volume import precomputed_skeleton
 from ...exceptions import CapabilityError
 
 logger = logging.getLogger("connecto")
 
 __all__ = ["fetch_skeletons", "l2_skeleton", "l2_info"]
 
-PRECOMPUTED_INFO = {
-    "@type": "neuroglancer_skeletons",
-    "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
-    "vertex_attributes": [
-        {"id": "radius", "data_type": "float32", "num_components": 1}
-    ],
-}
-
 
 def fetch_skeletons(ds, ids, version, *, progress: bool = True, **opts):
     """Yield ``(root_id, node_table)`` for each neuron."""
     from tqdm.auto import tqdm
 
-    source = ds._backend.skeleton_source
+    source = ds._skeleton_source(version)
     use_service = source is None and _service_available(ds)
 
     if source is None and not use_service and not ds.supports(Cap.L2CACHE):
@@ -53,7 +46,7 @@ def fetch_skeletons(ds, ids, version, *, progress: bool = True, **opts):
     for root in tqdm(ids, desc="Skeletons", disable=not progress or len(ids) < 2, leave=False):
         root = int(root)
         if source is not None:
-            yield root, _precomputed_skeleton(source, root, version)
+            yield root, precomputed_skeleton(source, root)
             continue
 
         if use_service:
@@ -78,17 +71,6 @@ def fetch_skeletons(ds, ids, version, *, progress: bool = True, **opts):
             )
 
         yield root, l2_skeleton(ds, root)
-
-
-def _precomputed_skeleton(source: str, root: int, version) -> pd.DataFrame:
-    """Read a neuroglancer precomputed skeleton. Already in nanometres."""
-    import navis
-
-    url = source.format(version=version)
-    tn = navis.read_precomputed(
-        f"{url}/{root}", datatype="skeleton", info=PRECOMPUTED_INFO
-    )
-    return tn.nodes
 
 
 def _service_available(ds) -> bool:

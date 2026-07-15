@@ -15,19 +15,17 @@ from .janelia import (
     MALECNS,
     MANC,
     MANC_SPEC,
-    OPTIC_LOBE,
     Fish2,
     Hemibrain,
     MaleCNS,
-    OpticLobe,
 )
 from .microns import MICRONS_SPEC, MICrONS
 
 __all__ = [
     "AEDES_SPEC", "BANC_SPEC", "FANC_SPEC", "MANC_SPEC", "MICRONS_SPEC",
-    "FISH2", "FLYWIRE", "FLYWIRE_PRODUCTION", "HEMIBRAIN", "MALECNS", "OPTIC_LOBE",
+    "FISH2", "FLYWIRE", "FLYWIRE_PRODUCTION", "HEMIBRAIN", "MALECNS",
     "CAVE", "NeuPrint",
     "Aedes", "BANC", "FANC", "Fish2", "FlyWire", "Hemibrain", "MANC", "MICrONS",
-    "MaleCNS", "OpticLobe",
+    "MaleCNS",
     "probe_cave", "probe_neuprint",
 ]

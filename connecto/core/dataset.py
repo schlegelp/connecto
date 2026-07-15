@@ -22,7 +22,7 @@ from .criteria import parse_ids
 from .spec import Cap, DatasetSpec
 from .version import Version
 
-__all__ = ["Dataset", "UNSET", "requires", "namespace"]
+__all__ = ["Dataset", "UNSET", "requires", "namespace", "capability_error"]
 
 
 class _Unset:
@@ -43,6 +43,51 @@ class _Unset:
 
 
 UNSET = _Unset()
+
+
+def _elsewhere(ds, caps) -> str:
+    """"The cave backend does" - when that is true, and nothing when it isn't.
+
+    A capability lives on a (dataset, backend) pair, not on a dataset: FlyWire has
+    a chunkedgraph and you cannot reach it through neuPrint. So "FlyWire does not
+    support chunkedgraph" is, on its own, a lie of omission that sends the reader
+    off to find another dataset when what they need is another *door*.
+    """
+    spec = getattr(ds, "spec", None)
+    if spec is None:  # a stub, or a dataset built without a spec
+        return ""
+    caps = list(caps)
+    others = [
+        b.kind
+        for b in spec.backends
+        if b.kind != ds.backend_kind
+        and all(c in spec.capabilities_for(b.kind) for c in caps)
+    ]
+    if not others:
+        return ""
+    kind = others[0]
+    return (
+        f" The {kind} backend does: "
+        f'cn.get_dataset("{spec.name}", backend="{kind}").'
+    )
+
+
+def capability_error(ds, caps, *, what: str | None = None) -> CapabilityError:
+    """The one place a "this dataset cannot do that" message is written.
+
+    Every refusal says three things: what is missing, what the dataset *can* do
+    instead, and - if the dataset is served by a backend that has it - where to go.
+    An error that only says "no" makes you go and read the source.
+    """
+    missing = ", ".join(str(c) for c in caps)
+    subject = f"has no `{what}` - it does not support {missing}" if what else (
+        f"does not support {missing}"
+    )
+    available = ", ".join(sorted(str(c) for c in ds.capabilities)) or "nothing"
+    return CapabilityError(
+        f"{ds.label} ({ds.backend_kind}) {subject}. "
+        f"Available: {available}.{_elsewhere(ds, caps)}"
+    )
 
 
 def requires(*caps: Cap):
@@ -67,11 +112,7 @@ def requires(*caps: Cap):
             ds = getattr(self, "_ds", self)
             missing = [c for c in caps if c not in ds.capabilities]
             if missing:
-                raise CapabilityError(
-                    f"{ds.label} ({ds.backend_kind}) does not support "
-                    f"{', '.join(str(c) for c in missing)}. "
-                    f"Available: {', '.join(sorted(str(c) for c in ds.capabilities))}."
-                )
+                raise capability_error(ds, missing)
 
             with upstream_errors(
                 ds.backend_kind, server=ds._auth_server, resource=ds.source, dataset=ds
@@ -105,11 +146,7 @@ class namespace:
             return self
         missing = [c for c in self.caps if c not in obj.capabilities]
         if missing:
-            raise CapabilityError(
-                f"{obj.label} ({obj.backend_kind}) has no `{self.name}` - it does not "
-                f"support {', '.join(str(c) for c in missing)}. "
-                f"Available: {', '.join(sorted(str(c) for c in obj.capabilities))}."
-            )
+            raise capability_error(obj, missing, what=self.name)
         if self.name not in obj._namespaces:
             obj._namespaces[self.name] = self.cls(obj)
         return obj._namespaces[self.name]
@@ -177,10 +214,63 @@ class Dataset(ABC):
 
     @property
     def capabilities(self) -> frozenset[Cap]:
-        return self.spec.capabilities
+        """What this dataset can do *through the backend it is bound to*.
+
+        Not `spec.capabilities` - that is what the *data* has, which is a different
+        and, for a live handle, useless claim. FlyWire has a chunkedgraph; a FlyWire
+        handle on the neuPrint backend cannot reach it, so it does not claim it.
+        """
+        return self.spec.capabilities_for(self.backend_kind)
 
     def supports(self, cap: Cap) -> bool:
         return cap in self.capabilities
+
+    # ---------------------------------------------------------------- provenance
+
+    @property
+    def description(self) -> str:
+        return self.spec.description
+
+    @property
+    def publications(self) -> tuple:
+        """The papers to cite for this dataset."""
+        return self.spec.publications
+
+    @property
+    def links(self) -> dict:
+        """Landing pages and data repositories, by name."""
+        return dict(self.spec.links)
+
+    @property
+    def public(self) -> bool:
+        """False if you need permission that a fresh token will not give you."""
+        return self.spec.public
+
+    @property
+    def access(self) -> str:
+        """What you need in order to read this dataset. Empty if it is public."""
+        return self.spec.access
+
+    def cite(self) -> str:
+        """Who to credit for this dataset.
+
+        connecto knows exactly which dataset produced the numbers in your figure,
+        which puts it in an unusually good position to tell you whose work it was::
+
+            print(cn.Hemibrain().cite())
+        """
+        lines = [f"{self.label} ({self.spec.species})".strip()]
+        if self.description:
+            lines += ["", self.description]
+        if self.publications:
+            lines += ["", "Please cite:"]
+            lines += [f"  {p}" for p in self.publications]
+        if self.links:
+            lines += ["", "See also:"]
+            lines += [f"  {k:<10} {v}" for k, v in self.links.items()]
+        if not self.public:
+            lines += ["", f"Access: {self.access}"]
+        return "\n".join(lines)
 
     # Namespaces that only some backends define at all. Without this, asking a
     # neuPrint dataset for `.segmentation` would raise a bare AttributeError with
@@ -209,11 +299,7 @@ class Dataset(ABC):
 
         cap = type(self)._BACKEND_NAMESPACES.get(name)
         if cap is not None:
-            raise CapabilityError(
-                f"{self.label} ({self.backend_kind}) has no `{name}` - it does not "
-                f"support {cap}. Available: "
-                f"{', '.join(sorted(str(c) for c in self.capabilities))}."
-            )
+            raise capability_error(self, [cap], what=name)
         raise AttributeError(
             f"{type(self).__name__!r} object has no attribute {name!r}"
         )
@@ -311,8 +397,9 @@ class Dataset(ABC):
             return default if supported else neutral
         if not supported and value not in (None, False):
             raise CapabilityError(
-                f"{self.label} does not support `{name}` "
+                f"{self.label} ({self.backend_kind}) does not support `{name}` "
                 f"(no {cap}). Drop the argument, or use a dataset that has it."
+                f"{_elsewhere(self, [cap])}"
             )
         return value
 
@@ -386,10 +473,30 @@ class Dataset(ABC):
         """This dataset's EM image volume, or None if it does not advertise one."""
         return None
 
+    def _skeleton_source(self, version) -> str | None:
+        """The published precomputed skeleton bucket for `version`, if there is one.
+
+        One resolver, because the bucket is keyed by the *release* and the two
+        backends spell a release differently: CAVE says `783`, the neuPrint mirror
+        says `flywire-fafb:v783b`. The backend supplies the key it needs
+        (`BackendSpec.skeleton_version`); the dataset supplies the bucket.
+        """
+        source = self.spec.skeleton_source
+        if source is None:
+            return None
+        key = self._backend.skeleton_version
+        return source.format(version=version if key is None else key)
+
     # Column maps: backend-declared, consumed by connecto.core.schemas.
     _edge_colmap: dict = {}
     _synapse_colmap: dict = {}
     _skeleton_colmap: dict = {}
 
-    # What units the backend's raw positions are in. schemas._rescale converts.
-    _raw_position_units: str = "voxel"
+    # The backend's usual convention. A *server* may differ - see
+    # `BackendSpec.position_units` - so nobody reads this directly.
+    _default_position_units: str = "voxel"
+
+    @property
+    def _raw_position_units(self) -> str:
+        """What units this server's raw positions are in. schemas._rescale converts."""
+        return self._backend.position_units or self._default_position_units

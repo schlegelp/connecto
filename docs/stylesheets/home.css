@@ -270,6 +270,24 @@ body[data-cn-home] .md-content {
   max-width: none;
 }
 
+/* The mascot stands in for the page title, so it is an `h1` - which means undoing
+   the heading's text styling. `display: block` on the image is what kills the
+   inline baseline gap that would otherwise sit under it. The source art is 1024px
+   square, so it is still capped well below its natural size. */
+.md-typeset h1.cn-logo {
+  margin: 0 0 0.8rem;
+  color: inherit;
+  font-size: 0;
+  line-height: 0;
+}
+
+.md-typeset h1.cn-logo img {
+  display: block;
+  width: 320px;
+  max-width: 60vw;
+  height: auto;
+}
+
 .cn-section {
   padding: 1.2rem 0 0.4rem;
 }

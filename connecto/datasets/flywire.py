@@ -3,9 +3,46 @@
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec
+from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec, Publication
 
 __all__ = ["FLYWIRE", "FLYWIRE_PRODUCTION", "FlyWire"]
+
+_PUBS = (
+    Publication(
+        authors="Dorkenwald S, Matsliah A, Sterling AR, Schlegel P, et al.",
+        year=2024,
+        title="Neuronal wiring diagram of an adult brain",
+        journal="Nature",
+        doi="10.1038/s41586-024-07558-y",
+    ),
+    Publication(
+        authors="Schlegel P, Yin Y, Bates AS, Dorkenwald S, et al.",
+        year=2024,
+        title=(
+            "Whole-brain annotation and multi-connectome cell typing of Drosophila"
+        ),
+        journal="Nature",
+        doi="10.1038/s41586-024-07686-5",
+    ),
+    # The EM volume the whole thing is built on. Cite it too: the segmentation is
+    # FlyWire's, the electrons are FAFB's.
+    Publication(
+        authors="Zheng Z, Lauritzen JS, Perlman E, Robinson CG, et al.",
+        year=2018,
+        title=(
+            "A complete electron microscopy volume of the brain of adult "
+            "Drosophila melanogaster"
+        ),
+        journal="Cell",
+        doi="10.1016/j.cell.2018.06.019",
+    ),
+)
+
+_LINKS = {
+    "website": "https://flywire.ai/",
+    "codex": "https://codex.flywire.ai/",
+    "annotations": "https://github.com/flyconnectome/flywire_annotations",
+}
 
 ANNOTATIONS_URL = (
     "https://raw.githubusercontent.com/flyconnectome/flywire_annotations/"
@@ -43,7 +80,41 @@ FLYWIRE = DatasetSpec(
     name="flywire",
     label="FlyWire (FAFB) public release",
     species="Drosophila melanogaster",
+    description=(
+        "The whole brain of an adult female Drosophila at synapse resolution, "
+        "proofread by the FlyWire community from the FAFB serial-section TEM volume. "
+        "The v783 public release has 139,255 neurons and ~50M synapses, with "
+        "community cell typing and predicted transmitters."
+    ),
+    publications=_PUBS,
+    links=_LINKS,
     backends=(
+        # neuPrint first, and therefore the default. It is the same release - its
+        # body IDs *are* CAVE root IDs at materialization 783 - and it answers
+        # connectivity queries in a fraction of the time, with an ROI hierarchy the
+        # CAVE datastack has no equivalent of.
+        #
+        # It is also a narrower door, and connecto says so rather than papering over
+        # it: no chunkedgraph (so no `update_ids`, no supervoxels), no proofreading,
+        # and - the one that would otherwise bite silently - no per-synapse
+        # transmitters, because this copy's Synapse nodes simply do not carry them.
+        # All three raise here and point you at `backend="cave"`. See BACKEND_LIMITS.
+        BackendSpec(
+            "neuprint",
+            "neuprint-cns.janelia.org/flywire-fafb:v783b",
+            extra_capabilities={Cap.ROIS},
+            # This mirror *is* CAVE materialization 783 - its body IDs are the root
+            # IDs at 783 - so it reads the 783 skeleton bucket. Said explicitly
+            # because its version string ("flywire-fafb:v783b") is not the bucket key.
+            skeleton_version=783,
+            # It was imported from CAVE and kept its nanometres, unlike every Janelia
+            # FIB-SEM dataset on neuPrint, which reports 8 nm voxels. Verified against
+            # the CAVE door: the same T-bar is (698640, 177936, 123200) here and
+            # (698916, 169808, 115280) nm there. Take neuPrint's usual word for it and
+            # every synapse position comes back 4-40x too big - silently, because the
+            # edges are still right.
+            position_units="nm",
+        ),
         BackendSpec(
             "cave",
             "flywire_fafb_public",
@@ -56,14 +127,7 @@ FLYWIRE = DatasetSpec(
             edge_view="valid_connection_v2",
             nucleus_table="nuclei_v1",
             proofreading_table="proofread_neurons",
-            # FlyWire publishes precomputed skeletons, one bucket per
-            # materialization. Needed because `flywire_fafb_public` has no L2
-            # cache, and the CAVE skeleton service requires one.
-            skeleton_source=(
-                "https://flyem.mrc-lmb.cam.ac.uk/flyconnectome/flywire_skeletons_{version}"
-            ),
         ),
-        BackendSpec("neuprint", "neuprint-cns.janelia.org/flywire-fafb:v783b"),
     ),
     annotation_sources=_ANNOTATIONS,
     fields=_FIELDS,
@@ -75,6 +139,15 @@ FLYWIRE = DatasetSpec(
     # the graphene source because it loads without a CAVE login. Note this is only
     # true of a frozen release; see FLYWIRE_PRODUCTION below.
     segmentation_source="precomputed://gs://flywire_v141_m783",
+    # FlyWire publishes precomputed skeletons, one bucket per materialization. A
+    # plain HTTPS bucket - no login, no CAVE client - so *both* doors read it, which
+    # is why it lives on the dataset and not on the CAVE backend. The public stack
+    # has no L2 cache (so CAVE's skeleton service cannot serve it) and the neuPrint
+    # mirror has no skeleton store at all, so this bucket is the only thing that
+    # gives FlyWire skeletons on either backend.
+    skeleton_source=(
+        "https://flyem.mrc-lmb.cam.ac.uk/flyconnectome/flywire_skeletons_{version}"
+    ),
     # FlyWire's own neuroglancer, which is a fork old enough that it speaks a
     # different state schema than every other dataset here.
     viewer="https://ngl.flywire.ai",
@@ -87,6 +160,16 @@ FLYWIRE = DatasetSpec(
 FLYWIRE_PRODUCTION = FLYWIRE.evolve(
     name="flywire-production",
     label="FlyWire (FAFB) production",
+    description=(
+        "The live, actively-proofread FlyWire stack. Same brain as the public "
+        "release, but a moving target: root IDs change with every edit."
+    ),
+    public=False,
+    access=(
+        "Needs FlyWire group membership, not just a token - an unprivileged account "
+        "gets a 403, and a fresh token will not fix it. Ask a FlyWire admin. The "
+        "public release (`flywire`) needs no such thing."
+    ),
     backends=(
         BackendSpec(
             "cave",
@@ -103,6 +186,10 @@ FLYWIRE_PRODUCTION = FLYWIRE.evolve(
     # opens, it just shows an empty brain. `None` means "ask the info service", which
     # hands back the graphene source that actually tracks the chunkedgraph.
     segmentation_source=None,
+    # Nor the precomputed skeletons, for the same reason: the buckets are published
+    # per *materialization* of the frozen release, and a live root ID is in none of
+    # them. Production has an L2 cache, so the CAVE skeleton service can serve it.
+    skeleton_source=None,
     # Production is live and editable, and unlike the public stack it does have an
     # L2 cache.
     capabilities=frozenset(_CAPS | {Cap.LIVE, Cap.L2CACHE}),

@@ -166,10 +166,12 @@ hb.rois.hierarchy()     # networkx.DiGraph
 
 ## Transmitters
 
-FlyWire has per-synapse neurotransmitter predictions. Rolling them up per neuron:
+FlyWire has per-synapse neurotransmitter predictions — **through the CAVE door**. The
+neuPrint mirror's `Synapse` nodes do not carry them, so ask the door that has them:
 
 ```python
-fw.connectivity.transmitters("DA1_lPN")
+fw_cave = cn.FlyWire(backend="cave")
+fw_cave.connectivity.transmitters("DA1_lPN")
 ```
 
 ```
@@ -193,8 +195,16 @@ hb.connectivity.transmitters("DA1_lPN")
 
 ```
 CapabilityError: hemibrain (neuprint) does not support nt_per_synapse.
-Available: annotations, connectivity, meshes, roi_connectivity, rois, skeletons,
-somas, synapse_scores, synapses.
+Available: annotations, connectivity, meshes, roi_connectivity, rois, segmentation,
+skeletons, somas, synapse_scores, synapses.
+```
+
+Ask the neuPrint-backed *FlyWire* and you get the same refusal — but with a way out,
+because that dataset does have transmitters, just not through that door:
+
+```
+CapabilityError: FlyWire (FAFB) public release (neuprint) does not support
+nt_per_synapse. ... The cave backend does: cn.get_dataset("flywire", backend="cave").
 ```
 
 ## Caching

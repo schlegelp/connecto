@@ -118,13 +118,62 @@ fw.supports(Cap.SEGMENTATION), fw.supports(Cap.CHUNKEDGRAPH)   # (True, True)
 hb.supports(Cap.SEGMENTATION), hb.supports(Cap.CHUNKEDGRAPH)   # (True, False)
 ```
 
+## A capability belongs to a *door*, not to a dataset
+
+FlyWire has a chunkedgraph. You cannot reach it through neuPrint.
+
+Both statements are true, which means "does FlyWire support `CHUNKEDGRAPH`?" is not
+actually a well-formed question. A dataset served by two backends is one dataset behind
+two doors, and the doors are different widths — so a capability lives on the *pair*:
+
+```python
+fw = cn.FlyWire()                   # neuPrint, the default
+fw.supports(cn.Cap.CHUNKEDGRAPH)    # False
+
+fw = cn.FlyWire(backend="cave")
+fw.supports(cn.Cap.CHUNKEDGRAPH)    # True
+```
+
+This is not pedantry. Before capabilities were resolved per backend, a neuPrint-backed
+FlyWire claimed `CHUNKEDGRAPH` and then raised on every call that used it — and, far
+worse:
+
+```python
+cn.FlyWire(backend="neuprint").connectivity.synapses(x, transmitters=True)
+```
+
+…returned a frame with **no `nt` column and no error**. The neuPrint copy of FlyWire
+simply does not carry per-synapse transmitters. That is the fafbseg bug at the top of
+this page, reproduced exactly, inside the library written to prevent it. It now raises:
+
+```
+CapabilityError: FlyWire (FAFB) public release (neuprint) does not support
+`transmitters` (no nt_per_synapse). Drop the argument, or use a dataset that has it.
+The cave backend does: cn.get_dataset("flywire", backend="cave").
+```
+
+Note the last sentence. A refusal that names the door which *would* have worked is the
+difference between a dead end and a next step.
+
+The narrowing is declared once, on the backend, rather than per dataset
+(`spec.BACKEND_LIMITS`) — neuPrint serves frozen snapshots, so it can never have
+supervoxels, an edit history, an L2 cache, or a "right now" query. The *widening* is
+declared per dataset, because it is a fact about that pairing: both neuPrint copies ship
+an ROI hierarchy their CAVE datastack has no equivalent of, so `ds.rois` appears when you
+come in through neuPrint and vanishes when you don't.
+
+```python
+cn.get_spec("flywire").backends_with(cn.Cap.CHUNKEDGRAPH)   # ('cave',)
+cn.get_spec("flywire").capabilities_for("neuprint")          # what you can actually reach
+```
+
 ## Checking up front
 
 ```python
 import connecto as cn
 
 ds.supports(cn.Cap.NT_PER_SYNAPSE)    # bool
-ds.capabilities                       # frozenset[Cap]
+ds.capabilities                       # frozenset[Cap] - for the backend it is bound to
 ```
 
 So adaptive code reads naturally:
@@ -150,19 +199,24 @@ cn.capability_matrix()
 ```
 
 ```
-                    annotations  connectivity  synapses  synapse_scores  nt_per_synapse  roi_connectivity   rois  skeletons  meshes  l2cache  segmentation  chunkedgraph  proofreading  somas   live  neuroglancer
-aedes                     False          True      True           False           False             False  False       True    True     True          True          True         False   True   True          True
-banc                       True          True      True           False           False              True  False       True    True     True          True          True         False   True  False          True
-fanc                       True          True      True            True           False             False  False       True    True     True          True          True          True   True   True          True
-fish2                      True          True      True            True           False              True   True       True    True    False         False         False         False   True  False         False
-flywire                    True          True      True            True            True              True  False       True    True    False          True          True          True   True  False          True
-flywire-production         True          True      True            True            True              True  False       True    True     True          True          True          True   True   True          True
-hemibrain                  True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
-malecns                    True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
-manc                       True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
-microns                    True          True      True           False           False             False  False       True    True     True          True          True         False   True  False          True
-optic-lobe                 True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
+                     backend  annotations  connectivity  synapses  synapse_scores  nt_per_synapse  roi_connectivity   rois  skeletons  meshes  l2cache  segmentation  chunkedgraph  proofreading  somas   live  neuroglancer
+aedes                   cave         True          True      True           False           False             False  False       True    True     True          True          True         False   True   True          True
+banc                neuprint         True          True      True           False           False              True   True      False   False    False         False         False         False   True  False         False
+banc                    cave         True          True      True           False           False              True  False       True    True     True          True          True         False   True  False          True
+fanc                    cave         True          True      True            True           False             False  False       True    True     True          True          True          True   True   True          True
+fish2               neuprint         True          True      True            True           False              True   True       True    True    False         False         False         False   True  False         False
+flywire             neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False          True
+flywire                 cave         True          True      True            True            True              True  False       True    True    False          True          True          True   True  False          True
+flywire-production      cave         True          True      True            True            True              True  False       True    True     True          True          True          True   True   True          True
+hemibrain           neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
+malecns             neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
+manc                neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
+microns                 cave         True          True      True           False           False             False  False       True    True     True          True          True         False   True  False          True
 ```
+
+One row per **door**, not per dataset — `banc` and `flywire` each appear twice, because
+that is where a capability actually lives. The first row for a dataset is its default
+backend: the one `get_dataset(name)` hands you.
 
 A `False` means the call **raises**. It does not mean it returns something subtly
 wrong, or an empty frame, or a frame with a column of `NaN`.

@@ -46,8 +46,10 @@ class NeuPrintDataset(Dataset):
     viz = namespace(Viz, Cap.NEUROGLANCER)
     segmentation = namespace(Segmentation, Cap.SEGMENTATION)
 
-    # neuPrint returns voxel coordinates; spec.voxel_size takes them to nm.
-    _raw_position_units = "voxel"
+    # neuPrint usually returns voxel coordinates; spec.voxel_size takes them to nm.
+    # "Usually" is load-bearing: the mirrors of FlyWire and BANC were imported from
+    # CAVE and kept its nanometres, and they say so via `BackendSpec.position_units`.
+    _default_position_units = "voxel"
 
     # ------------------------------------------------------------------ volumes
 
@@ -59,8 +61,8 @@ class NeuPrintDataset(Dataset):
         So it has to be searched by `dataType`, not indexed: on hemibrain, entry 0
         is the grayscale.
 
-        Only some servers fill this in at all (hemibrain does; MANC, optic-lobe,
-        maleCNS and fish2 all return None), which is why the specs carry a verified
+        Only some servers fill this in at all (hemibrain does; MANC, maleCNS and
+        fish2 all return None), which is why the specs carry a verified
         `segmentation_source` and this is only the fallback.
         """
         for layer in self.client.meta.get("neuroglancerMeta") or []:
@@ -233,7 +235,19 @@ class NeuPrintDataset(Dataset):
     def _fetch_skeletons(self, ids, version, *, heal: bool = True, progress: bool = True, **opts):
         from tqdm.auto import tqdm
 
+        from ...core.volume import precomputed_skeleton
+
+        # A published precomputed bucket wins over neuPrint's own skeleton store.
+        # Not every neuPrint dataset *has* a store - `flywire-fafb:v783b` answers
+        # HTTP 400, "no store found supporting the datatype and dataset" - and where
+        # a dataset publishes skeletons of its own, those are the authoritative ones
+        # anyway. Backend-independent by design: it is a plain HTTPS bucket.
+        source = self._skeleton_source(version)
+
         for body in tqdm(ids, desc="Skeletons", disable=not progress or len(ids) < 2, leave=False):
+            if source is not None:
+                yield int(body), precomputed_skeleton(source, int(body))
+                continue
             yield int(body), self.client.fetch_skeleton(
                 int(body), heal=heal, format="pandas"
             )

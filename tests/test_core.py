@@ -9,6 +9,7 @@ import pytest
 import connecto as co
 from connecto.core.criteria import to_criteria
 from connecto.core.schemas import normalize_annotations, normalize_edges
+from connecto.core.spec import Cap
 from connecto.core.version import semantic_key, sort_versions
 
 # --------------------------------------------------------------------- versions
@@ -142,31 +143,85 @@ def test_derive_extracts_a_value_from_another_column():
 
 # ------------------------------------------------------------------ capabilities
 
+def _row(m, name, backend):
+    """One (dataset, backend) row out of the matrix."""
+    return m[m["backend"] == backend].loc[name]
+
+
 def test_capability_matrix_covers_every_dataset():
     m = co.capability_matrix()
     assert "flywire" in m.index and "microns" in m.index and "fish2" in m.index
-    # The promises the specs make.
-    assert m.loc["flywire", "nt_per_synapse"]
-    assert not m.loc["microns", "nt_per_synapse"]
-    assert not m.loc["flywire", "live"]  # frozen public release
-    assert m.loc["flywire-production", "live"]
+
+    # The promises the specs make. Note the matrix has a row per *door*, not per
+    # dataset - see test_a_capability_belongs_to_a_backend_not_a_dataset.
+    fw = _row(m, "flywire", "cave")
+    assert fw["nt_per_synapse"]
+    assert not _row(m, "microns", "cave")["nt_per_synapse"]
+    assert not fw["live"]  # frozen public release
+    assert _row(m, "flywire-production", "cave")["live"]
 
     # hemibrain has a segmentation volume (a flat precomputed bucket) but no
     # chunkedgraph under it - its body IDs are frozen. Two capabilities, because
     # collapsing them would force us to lie about one or the other.
-    assert m.loc["hemibrain", "segmentation"]
-    assert not m.loc["hemibrain", "chunkedgraph"]
-    assert m.loc["flywire", "segmentation"] and m.loc["flywire", "chunkedgraph"]
+    hb = _row(m, "hemibrain", "neuprint")
+    assert hb["segmentation"]
+    assert not hb["chunkedgraph"]
+    assert fw["segmentation"] and fw["chunkedgraph"]
 
     # fish2 publishes no volume we could verify, so it claims none.
-    assert not m.loc["fish2", "segmentation"]
+    assert not _row(m, "fish2", "neuprint")["segmentation"]
+
+
+def test_a_capability_belongs_to_a_backend_not_a_dataset():
+    """FlyWire *has* a chunkedgraph; you cannot reach it through neuPrint.
+
+    Before this, capabilities were declared per dataset, so a neuPrint-backed FlyWire
+    reported `supports(CHUNKEDGRAPH) == True` while every chunkedgraph call raised -
+    and, worse, `synapses(transmitters=True)` returned a frame with no `nt` column and
+    no error. That is the exact fafbseg failure this library exists to prevent, so the
+    capability now lives on the (dataset, backend) pair.
+    """
+    spec = co.get_spec("flywire")
+
+    cave = spec.capabilities_for("cave")
+    neuprint = spec.capabilities_for("neuprint")
+
+    # The narrow door: no supervoxels, no edit history, and - the one that would
+    # otherwise bite silently - no per-synapse transmitters in this copy.
+    for cap in (Cap.CHUNKEDGRAPH, Cap.PROOFREADING, Cap.NT_PER_SYNAPSE):
+        assert cap in cave
+        assert cap not in neuprint
+
+    # ...but a *wider* one in the other direction: neuPrint ships an ROI hierarchy
+    # that the CAVE datastack has no equivalent of.
+    assert Cap.ROIS in neuprint
+    assert Cap.ROIS not in cave
+
+    assert spec.backends_with(Cap.CHUNKEDGRAPH) == ("cave",)
+    assert spec.backends_with(Cap.CONNECTIVITY) == ("neuprint", "cave")
+
+
+def test_a_backend_may_not_add_what_it_cannot_serve():
+    """The contradiction is unregisterable, rather than discovered by a user."""
+    with pytest.raises(ValueError, match="cannot serve"):
+        co.BackendSpec("neuprint", "x/y:v1", extra_capabilities={Cap.CHUNKEDGRAPH})
+
+
+def test_a_refusal_names_the_backend_that_can_do_it():
+    """An error that only says "no" makes you go and read the source."""
+    fw = co.get_dataset("flywire")  # neuPrint by default
+    with pytest.raises(co.CapabilityError) as exc:
+        _ = fw.proofreading
+    assert 'backend="cave"' in str(exc.value)
 
 
 def test_backend_and_dataset_are_orthogonal():
     # BANC is served by both, at the same snapshot. This is the fact the whole
-    # spec/registry design exists to express.
+    # spec/registry design exists to express. neuPrint is listed first, so it is the
+    # default: same snapshot, faster, and it has ROIs.
     banc = co.get_spec("banc")
-    assert banc.backend_kinds == ("cave", "neuprint")
+    assert banc.backend_kinds == ("neuprint", "cave")
+    assert banc.backend() is banc.backend("neuprint")  # first == default
     assert banc.backend("cave").default_version == 888
     assert banc.backend("neuprint").source.endswith("banc:v888")
 
@@ -179,3 +234,24 @@ def test_asking_for_a_backend_a_dataset_lacks_says_so():
 def test_unknown_dataset_lists_the_known_ones():
     with pytest.raises(co.NoSuchDatasetError, match="flywire"):
         co.get_spec("nope")
+
+
+def test_auto_prefers_a_public_source_but_falls_back_to_a_private_one():
+    """`annotations="auto"` skips non-public sources so an ordinary user gets one they
+    can actually read. But a gated dataset (aedes) may have *only* a private source -
+    and there, returning None would make `.annotations.get()` claim "no source", which
+    is false. So auto falls back to the first source rather than giving up."""
+    from connecto.core.spec import AnnotationSource, BackendSpec, DatasetSpec
+
+    be = (BackendSpec("cave", "x"),)
+    pub = AnnotationSource("public", "github_tsv", "u")
+    priv = AnnotationSource("flytable", "seatable", "b.t", public=False)
+
+    both = DatasetSpec(name="both", backends=be, annotation_sources=(pub, priv))
+    assert both.annotation_source("auto") is pub  # public wins when present
+
+    private_only = DatasetSpec(name="priv", backends=be, annotation_sources=(priv,))
+    assert private_only.annotation_source("auto") is priv  # ...else fall back, not None
+
+    none_at_all = DatasetSpec(name="bare", backends=be, annotation_sources=())
+    assert none_at_all.annotation_source("auto") is None  # genuinely nothing -> None

@@ -353,13 +353,25 @@ class Skeletons(_Namespace):
     @requires(Cap.SKELETONS)
     def get(self, x, *, output: str = "navis", version=None, **opts):
         """Skeletons for the given neurons -> ``navis.NeuronList``."""
+        from . import volume
+
         ds = self._ds
         v = ds._resolve_version_arg(version)
         ids = ds.ids(x, version=version)
 
+        # A published precomputed skeleton is not backend data: it comes out of a
+        # plain HTTPS bucket, canonical and in nanometres, whichever door fetched it.
+        # So it is normalised as itself rather than through the backend's column map
+        # and voxel scaling. (See PRECOMPUTED_SKELETON_COLMAP for what that cost.)
+        precomputed = ds._skeleton_source(v) is not None
+        colmap = volume.PRECOMPUTED_SKELETON_COLMAP if precomputed else ds._skeleton_colmap
+        source_units = volume.PRECOMPUTED_SKELETON_UNITS if precomputed else None
+
         out = []
         for nid, raw in ds._fetch_skeletons(ids, v, **opts):
-            nodes = schemas.normalize_skeleton(raw, ds, colmap=ds._skeleton_colmap)
+            nodes = schemas.normalize_skeleton(
+                raw, ds, colmap=colmap, source_units=source_units
+            )
             out.append((nid, nodes))
 
         if output == "raw":

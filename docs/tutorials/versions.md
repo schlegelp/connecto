@@ -25,7 +25,10 @@ as of one instant.
 ```python
 import connecto as cn
 
-fw = cn.FlyWire()
+# The CAVE door, deliberately: materializations are a chunkedgraph notion, and this
+# whole page is about them. `cn.FlyWire()` gives you the neuPrint mirror, whose body
+# IDs are frozen and have no lineage to walk.
+fw = cn.FlyWire(backend="cave")
 fw.versions()
 ```
 
@@ -147,10 +150,22 @@ is the fraction of the old neuron's supervoxels that ended up in the new one —
 value means the old neuron was split, and "the equivalent" is a judgement call you
 should look at.
 
-This is CAVE-only, obviously:
+This needs a chunkedgraph, so it is CAVE-only — and note that is a *narrower* claim than
+"needs a segmentation". hemibrain has a segmentation volume; what it does not have is
+supervoxels and a lineage under it:
 
 ```python
-hasattr(cn.Hemibrain(), "segmentation")   # False
+hb = cn.Hemibrain()
+hasattr(hb, "segmentation")             # True  - there is a volume to query
+hb.supports(cn.Cap.CHUNKEDGRAPH)        # False - but nothing to walk
+```
+
+The same goes for the *neuPrint door onto FlyWire*, which is why this page opened with
+`backend="cave"`:
+
+```python
+cn.FlyWire().supports(cn.Cap.CHUNKEDGRAPH)                  # False
+cn.FlyWire(backend="cave").supports(cn.Cap.CHUNKEDGRAPH)    # True
 ```
 
 ## Live queries

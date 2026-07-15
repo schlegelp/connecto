@@ -285,7 +285,9 @@ def validate_token(service: str, *, token=None, server=None) -> Identity:
 # ----------------------------------------------------------- error translation
 
 
-def _message(kind: str, service: str, info: TokenInfo, server, resource) -> str:
+def _message(
+    kind: str, service: str, info: TokenInfo, server, resource, dataset=None
+) -> str:
     what = SERVICE_NAMES.get(service, service)
     where = f"\n  {server}" if server else ""
     where += f"\n  [{resource}]" if resource else ""
@@ -338,13 +340,19 @@ def _message(kind: str, service: str, info: TokenInfo, server, resource) -> str:
             "does not have.",
             "A new token will not help - you need to be granted access.",
         ]
+        # The dataset knows what it takes to read it, and this is the one moment the
+        # user actually needs to hear it. A generic "you need permission" leaves them
+        # guessing at *whose*; `spec.access` names the group and who grants it.
+        need = getattr(getattr(dataset, "spec", None), "access", "")
+        if need:
+            lines += ["", f"{dataset.label}: {need}"]
 
     lines += ["", "Run co.auth_status() to see every credential connecto can find."]
     return "\n".join(lines)
 
 
 @contextmanager
-def auth_errors(service: str, *, server=None, resource=None):
+def auth_errors(service: str, *, server=None, resource=None, dataset=None):
     """Translate upstream 401/403s into something the user can act on.
 
     caveclient raises its own ``AuthException`` when no token is configured, and a
@@ -371,7 +379,7 @@ def auth_errors(service: str, *, server=None, resource=None):
         if kind == ConnectoAuthError.INVALID and not info.ok:
             kind = ConnectoAuthError.MISSING
         raise ConnectoAuthError(
-            _message(kind, service, info, server, resource),
+            _message(kind, service, info, server, resource, dataset),
             kind=kind, service=service, server=server,
         ) from e
     except Exception as e:  # noqa: BLE001
@@ -379,7 +387,9 @@ def auth_errors(service: str, *, server=None, resource=None):
             raise
         info = get_token(service, server=server)
         raise ConnectoAuthError(
-            _message(ConnectoAuthError.MISSING, service, info, server, resource),
+            _message(
+                ConnectoAuthError.MISSING, service, info, server, resource, dataset
+            ),
             kind=ConnectoAuthError.MISSING, service=service, server=server,
         ) from e
 

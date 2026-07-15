@@ -63,7 +63,7 @@ class CAVEDataset(Dataset):
     l2 = namespace(L2, Cap.L2CACHE)
 
     # CAVE hands back nanometres because we ask for them (desired_resolution).
-    _raw_position_units = "nm"
+    _default_position_units = "nm"
 
     # ------------------------------------------------------------------ volumes
 

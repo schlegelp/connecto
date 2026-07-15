@@ -18,7 +18,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
-__all__ = ["Cap", "BackendSpec", "AnnotationSource", "DatasetSpec", "MULTI_SEP", "DIALECTS"]
+__all__ = [
+    "Cap",
+    "BackendSpec",
+    "AnnotationSource",
+    "DatasetSpec",
+    "Publication",
+    "BACKEND_LIMITS",
+    "MULTI_SEP",
+    "DIALECTS",
+]
 
 # The neuroglancer state schemas we can emit. See `DatasetSpec.viewer_dialect`.
 DIALECTS = ("modern", "seunglab")
@@ -78,6 +87,43 @@ class Cap(str, Enum):
         return self.value
 
 
+# What a backend cannot do, whatever the dataset asks for.
+#
+# A capability is a property of a *dataset seen through a backend*, not of the
+# dataset alone. BANC and FlyWire are each served by both backends, and the two
+# doors are not equally wide: FlyWire has a chunkedgraph, but you cannot reach it
+# through neuPrint. So the dataset declares what the *data* has, the backend
+# subtracts what it cannot deliver, and `DatasetSpec.capabilities_for` is the only
+# thing anyone asks.
+#
+# Getting this wrong is not cosmetic. Before this existed, `FlyWire(backend=
+# "neuprint").supports(CHUNKEDGRAPH)` returned True and every chunkedgraph call
+# raised anyway; `synapses(x, transmitters=True)` returned a frame with no `nt`
+# column and no error - the exact fafbseg failure this library exists to prevent.
+BACKEND_LIMITS: Mapping[str, frozenset[Cap]] = {
+    "cave": frozenset(),
+    "neuprint": frozenset(
+        {
+            # Structural. neuPrint serves frozen snapshots of a finished
+            # segmentation: there are no supervoxels under a body ID, no edit
+            # history, no L2 cache and nothing to query "right now".
+            Cap.CHUNKEDGRAPH,
+            Cap.PROOFREADING,
+            Cap.L2CACHE,
+            Cap.LIVE,
+            # Not structural - a gap in *our* backend. BANC's neuPrint copy really
+            # does carry per-synapse transmitter probabilities (`ntGabaProb`, ...)
+            # on its Synapse nodes; FlyWire's copy does not carry them at all. Our
+            # `_fetch_synapses` fetches neither. Until it does, claiming the
+            # capability would mean `transmitters=True` was silently ignored, so it
+            # is denied here and `transmitters=True` raises. Delete this line the
+            # day the backend learns to read those properties.
+            Cap.NT_PER_SYNAPSE,
+        }
+    ),
+}
+
+
 @dataclass(frozen=True)
 class BackendSpec:
     """How one backend serves one dataset.
@@ -88,6 +134,45 @@ class BackendSpec:
     kind: str  # "cave" | "neuprint"
     source: str  # CAVE datastack, or "server/dataset[:version]"
     default_version: object = "latest"
+
+    # Capabilities this backend adds to the dataset's, because the door is *wider*
+    # than the dataset's baseline. Both neuPrint copies of FlyWire and BANC ship a
+    # full ROI hierarchy that the CAVE datastack has no equivalent of, so the same
+    # dataset gains `ds.rois` when you come in through neuPrint.
+    extra_capabilities: frozenset[Cap] = frozenset()
+
+    # What units *this server* reports positions in. None means the backend's usual
+    # convention (CAVE asks for nm outright; neuPrint hands back voxels).
+    #
+    # It has to be per-pairing, because it is not a property of either alone. The
+    # Janelia FIB-SEM datasets on neuPrint (hemibrain, MANC, maleCNS) report 8 nm
+    # voxels, as expected - but the neuPrint *mirrors* of FlyWire and BANC were
+    # imported from CAVE and kept its nanometres. Taking the backend's word for it
+    # multiplied every synapse position by the voxel size again: FlyWire T-bars came
+    # back 4-40x out, BANC's 4-45x, and nothing said a word. Edges were fine; only
+    # the coordinates were wrong, which is the kind of bug that survives to
+    # publication. Verified per dataset against the CAVE door, which is the ruler.
+    position_units: str | None = None
+
+    # Which key to interpolate into `DatasetSpec.skeleton_source`. None means "the
+    # version this handle resolved to", which is right for CAVE - ask for
+    # materialization 630 and you want the 630 skeletons.
+    #
+    # neuPrint needs to say it explicitly, because its version *string* is not the
+    # bucket key: the mirror calls itself `flywire-fafb:v783b` and the bucket is
+    # `flywire_skeletons_783`. Interpolating the former gives a 404 for every neuron.
+    skeleton_version: object = None
+
+    # ...and capabilities this *particular* pairing cannot serve, though both the
+    # dataset and the backend can in general. BACKEND_LIMITS is for what a backend
+    # can never do; this is for what one server happens not to host.
+    #
+    # BANC's neuPrint mirror is the case in point: neuPrint serves skeletons and
+    # meshes perfectly well for hemibrain, but `banc:v888` has no skeleton store
+    # (HTTP 400, "no store found supporting the datatype and dataset") and no volume
+    # of its own - BANC's only segmentation is the CAVE graphene one. So that door is
+    # connectivity, annotations and ROIs, and it says so instead of 400ing at you.
+    missing_capabilities: frozenset[Cap] = frozenset()
 
     # --- CAVE table wiring. None means "probe at runtime".
     synapse_table: str | None = None
@@ -100,15 +185,59 @@ class BackendSpec:
     # not a capability. Whether the dataset *has* scores is Cap.SYNAPSE_SCORES.
     score_column: str = "cleft_score"
 
-    # Precomputed neuroglancer skeletons, if the dataset publishes them.
-    # May contain "{version}" - FlyWire ships one bucket per materialization.
-    # Preferred over the CAVE skeleton service, which needs an L2 cache that not
-    # every datastack has (`flywire_fafb_public`, notably, does not).
-    skeleton_source: str | None = None
-
     def __post_init__(self):
-        if self.kind not in ("cave", "neuprint"):
+        if self.kind not in BACKEND_LIMITS:
             raise ValueError(f"Unknown backend kind: {self.kind!r}")
+        object.__setattr__(
+            self, "extra_capabilities", frozenset(self.extra_capabilities)
+        )
+        object.__setattr__(
+            self, "missing_capabilities", frozenset(self.missing_capabilities)
+        )
+        if self.position_units not in (None, "nm", "voxel"):
+            raise ValueError(
+                f"`position_units` must be 'nm', 'voxel' or None, got "
+                f"{self.position_units!r}."
+            )
+        # A backend cannot add what it is structurally unable to serve. Catching
+        # this here means the contradiction is impossible to register, rather than
+        # being discovered by a user whose `update_ids` call raises.
+        impossible = self.extra_capabilities & BACKEND_LIMITS[self.kind]
+        if impossible:
+            raise ValueError(
+                f"The {self.kind!r} backend cannot serve "
+                f"{', '.join(sorted(str(c) for c in impossible))}, so "
+                f"{self.source!r} may not add it."
+            )
+
+
+@dataclass(frozen=True)
+class Publication:
+    """A paper to cite when you use a dataset.
+
+    Datasets are other people's years of work. connecto is in the unusual position
+    of knowing exactly which dataset you just queried, so it can also tell you who
+    to credit for it - and `ds.cite()` is a great deal harder to forget than a
+    citation buried in a README.
+    """
+
+    authors: str  # "Dorkenwald S, Matsliah A, Sterling AR, et al."
+    year: int
+    title: str
+    journal: str = ""
+    doi: str = ""
+
+    @property
+    def url(self) -> str:
+        return f"https://doi.org/{self.doi}" if self.doi else ""
+
+    def __str__(self) -> str:
+        bits = [f"{self.authors} ({self.year}) {self.title}."]
+        if self.journal:
+            bits.append(f"{self.journal}.")
+        if self.doi:
+            bits.append(f"doi:{self.doi}")
+        return " ".join(bits)
 
 
 @dataclass(frozen=True)
@@ -149,6 +278,23 @@ class DatasetSpec:
     label: str = ""
     species: str = ""
 
+    # --- Who made this, and may you have it?
+    #
+    # A dataset is a scientific artefact with authors, a home page and an access
+    # policy, and connecto is the last place that knows which one you are using
+    # before the results turn into a figure. So it carries all three.
+
+    description: str = ""  # a sentence or two: what was imaged, and how much of it
+    publications: tuple[Publication, ...] = ()
+    links: Mapping[str, str] = field(default_factory=dict)  # name -> landing page
+
+    # `public=False` does not mean secret - every dataset here is one you may read
+    # *about*. It means connecto cannot get you the data on a fresh token, and it is
+    # much kinder to say so in `list_datasets()` than to let you discover it from a
+    # 403 halfway through a script. `access` is the sentence that says what you need.
+    public: bool = True
+    access: str = ""
+
     annotation_sources: tuple[AnnotationSource, ...] = ()
 
     # Canonical field -> source columns, in priority order. First non-null wins.
@@ -171,6 +317,20 @@ class DatasetSpec:
     voxel_size: tuple[float, float, float] | None = None  # nm
     template_space: str | None = None
     segmentation_source: str | None = None
+
+    # Precomputed neuroglancer skeletons, if the dataset publishes them. May contain
+    # "{version}" - FlyWire ships one bucket per materialization.
+    #
+    # A *dataset* property, not a backend one, because that is what it is: a public
+    # HTTPS bucket that needs no login and no CAVE client, and it is the same
+    # skeleton whichever door you came in by. Keeping it on the CAVE BackendSpec
+    # meant the neuPrint-backed FlyWire could not see it, so `skeletons.get()` went
+    # to neuPrint's skeleton store - which for `flywire-fafb:v783b` does not exist,
+    # and answers HTTP 400.
+    #
+    # Preferred over both backends' own skeleton services: CAVE's needs an L2 cache
+    # that `flywire_fafb_public` does not have, and neuPrint's is not always there.
+    skeleton_source: str | None = None
 
     # Which neuroglancer to send people to, and which *state dialect* it speaks.
     #
@@ -201,15 +361,23 @@ class DatasetSpec:
                 f"Dataset {self.name!r}: `viewer_dialect` must be one of "
                 f"{', '.join(DIALECTS)}, got {self.viewer_dialect!r}."
             )
+        if not self.public and not self.access:
+            raise ValueError(
+                f"Dataset {self.name!r} is marked non-public but says nothing about "
+                f"`access`. Saying 'you cannot have this' without saying how to ask "
+                f"for it is worse than not saying it at all."
+            )
         # Normalise to immutable mappings so the spec is genuinely frozen.
         object.__setattr__(self, "fields", dict(self.fields))
         object.__setattr__(self, "derive", dict(self.derive))
         object.__setattr__(self, "side_map", dict(self.side_map))
+        object.__setattr__(self, "links", dict(self.links))
+        object.__setattr__(self, "publications", tuple(self.publications))
         object.__setattr__(self, "capabilities", frozenset(self.capabilities))
         object.__setattr__(self, "backends", tuple(self.backends))
 
     def backend(self, kind: str | None = None) -> BackendSpec:
-        """Get the backend spec of the given kind, or the first one."""
+        """Get the backend spec of the given kind, or the default (the first)."""
         if kind is None:
             return self.backends[0]
         for b in self.backends:
@@ -224,6 +392,30 @@ class DatasetSpec:
     def backend_kinds(self) -> tuple[str, ...]:
         return tuple(b.kind for b in self.backends)
 
+    def capabilities_for(self, kind: str | None = None) -> frozenset[Cap]:
+        """What this dataset can do *through this backend*.
+
+        `self.capabilities` is what the data has. This is what you can actually
+        reach, and it is the only one anyone should ask: a dataset object is always
+        bound to one backend, so the unqualified set is a claim nobody can use.
+        """
+        b = self.backend(kind)
+        return (
+            (self.capabilities | b.extra_capabilities)
+            - BACKEND_LIMITS[b.kind]
+            - b.missing_capabilities
+        )
+
+    def backends_with(self, cap: Cap) -> tuple[str, ...]:
+        """Which of this dataset's backends can serve `cap`. Possibly none.
+
+        Exists so a CapabilityError can end with "the cave backend does" instead of
+        a flat no - the difference between a dead end and a next step.
+        """
+        return tuple(
+            b.kind for b in self.backends if cap in self.capabilities_for(b.kind)
+        )
+
     def annotation_source(self, name: str | None = "auto") -> AnnotationSource | None:
         """Pick an annotation source by name.
 
@@ -235,7 +427,12 @@ class DatasetSpec:
             for s in self.annotation_sources:
                 if s.public:
                     return s
-            return None
+            # No public source. That is a gated dataset whose only annotations are
+            # lab-internal (aedes: FlyTable). Returning None would make
+            # `.annotations.get()` claim "no source configured" - false, there is
+            # one; it just needs credentials. Fall back to the first source and let
+            # the fetch raise a clear missing-token error if the caller can't read it.
+            return self.annotation_sources[0]
         for s in self.annotation_sources:
             if s.name == name:
                 return s

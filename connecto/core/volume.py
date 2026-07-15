@@ -35,13 +35,57 @@ import numpy as np
 
 __all__ = [
     "GSPointLoader",
+    "PRECOMPUTED_SKELETON_COLMAP",
+    "PRECOMPUTED_SKELETON_INFO",
     "get_cloudvolume",
     "get_voxels",
     "lookup_points",
+    "precomputed_skeleton",
     "segmentation_cutout",
 ]
 
+# A precomputed skeleton arrives canonical and in nanometres. It is *not* backend
+# data, so it must not be run through the backend's column map or its voxel scaling
+# - which is exactly what happened when FlyWire's neuPrint door first read this
+# bucket: neuPrint's map looked for `rowId`/`link` and found neither, and its
+# `voxel` units would have multiplied every coordinate by (4, 4, 40).
+PRECOMPUTED_SKELETON_COLMAP = {
+    "node_id": "node_id",
+    "parent_id": "parent_id",
+    "x": "x", "y": "y", "z": "z", "radius": "radius",
+}
+PRECOMPUTED_SKELETON_UNITS = "nm"
+
 _VOLUMES: dict = {}
+
+# What a neuroglancer precomputed skeleton bucket looks like. Passed explicitly
+# because these buckets typically ship no `info` of their own.
+PRECOMPUTED_SKELETON_INFO = {
+    "@type": "neuroglancer_skeletons",
+    "transform": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0],
+    "vertex_attributes": [
+        {"id": "radius", "data_type": "float32", "num_components": 1}
+    ],
+}
+
+
+def precomputed_skeleton(url: str, root: int):
+    """Read a published neuroglancer skeleton. Already in nanometres.
+
+    `url` is the resolved bucket (see `Dataset._skeleton_source`).
+
+    Backend-agnostic, and that is the point: this is a plain HTTPS bucket, needing
+    no login and no client of any kind, so the same skeleton comes back whichever
+    door you came in by. It used to live in the CAVE backend, which meant the
+    neuPrint-backed FlyWire could not see it and fell through to neuPrint's own
+    skeleton store - which, for `flywire-fafb:v783b`, does not exist.
+    """
+    import navis
+
+    tn = navis.read_precomputed(
+        f"{url}/{int(root)}", datatype="skeleton", info=PRECOMPUTED_SKELETON_INFO
+    )
+    return tn.nodes
 
 
 def get_cloudvolume(ds, source: str | None = None):

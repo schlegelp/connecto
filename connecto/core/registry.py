@@ -46,7 +46,12 @@ def get_dataset(name: str, **kwargs):
 
 
 def list_datasets() -> pd.DataFrame:
-    """Every registered dataset, and which backends serve it."""
+    """Every registered dataset, which backends serve it, and whether you can read it.
+
+    The first backend listed is the default - the one ``get_dataset(name)`` gives
+    you. ``public=False`` is not a secret; it means a fresh token is not enough, and
+    ``get_spec(name).access`` says what is.
+    """
     rows = [
         {
             "name": s.name,
@@ -54,6 +59,7 @@ def list_datasets() -> pd.DataFrame:
             "species": s.species,
             "backends": ", ".join(s.backend_kinds),
             "annotations": ", ".join(a.name for a in s.annotation_sources),
+            "public": s.public,
         }
         for s in sorted(REGISTRY.values(), key=lambda s: s.name)
     ]
@@ -61,15 +67,23 @@ def list_datasets() -> pd.DataFrame:
 
 
 def capability_matrix() -> pd.DataFrame:
-    """Datasets x capabilities.
+    """Datasets x capabilities - one row per (dataset, backend).
 
     The executable form of the "no silent degradation" promise: if a cell is
     False, the corresponding call raises rather than quietly returning something
     subtly wrong.
+
+    There is a row per *door*, not per dataset, because that is where a capability
+    actually lives. BANC and FlyWire are each served by both backends and the doors
+    are different widths - neuPrint adds ROIs and takes away the chunkedgraph - so a
+    single row per dataset could only be true by being vague. The default backend
+    (what you get from ``get_dataset(name)``) comes first.
     """
     caps = list(Cap)
-    data = {
-        s.name: [c in s.capabilities for c in caps]
-        for s in sorted(REGISTRY.values(), key=lambda s: s.name)
-    }
-    return pd.DataFrame(data, index=[str(c) for c in caps]).T
+    rows, index = [], []
+    for s in sorted(REGISTRY.values(), key=lambda s: s.name):
+        for b in s.backends:
+            have = s.capabilities_for(b.kind)
+            rows.append({"backend": b.kind} | {str(c): c in have for c in caps})
+            index.append(s.name)
+    return pd.DataFrame(rows, index=index)

@@ -1,20 +1,27 @@
 """Aedes - the mosquito brain (Wei-Chung Lee lab).
 
-Notable mostly for what it does *not* have: no annotation table of any kind. The
-datastack ships a synapse table, a nucleus table, and nothing else - so there is no
-column that means "type" or "side", and connecto says so rather than guessing:
+The CAVE datastack is bare: a synapse table, a nucleus table, and no annotation table
+at all - no column that means "type" or "side". The project keeps its cell typing
+elsewhere, in FlyTable (the lab's SeaTable database): the `aedes_main` table of the
+`aedes` base. So connecto reads annotations from there rather than from CAVE:
 
-    aedes.connectivity.edges(root_ids)   # fine
-    aedes.ids("SomeType")                # raises: aedes has no annotations
+    aedes.connectivity.edges(root_ids)   # from CAVE
+    aedes.ids("class:KC")                # from FlyTable
 
-That is the whole point of `fields` being data. An empty `fields` is not a stub to be
-filled in later; it is the honest description of this datastack.
+FlyTable is lab-internal - it needs a SEATABLE_TOKEN on top of CAVE access, and there
+is no public alternative - so the source is `public=False`. Because it is the only
+source, `annotations="auto"` falls back to it (see `DatasetSpec.annotation_source`);
+a caller without the token gets a clear missing-token error, not a silently empty
+frame.
 """
 
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import BackendSpec, Cap, DatasetSpec
+from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec
+
+# aedes_main records side as L / R / M (with ~530 blanks, which are not a side).
+_SIDES = {"L": "left", "R": "right", "M": "center"}
 
 __all__ = ["AEDES_SPEC", "Aedes"]
 
@@ -22,6 +29,30 @@ AEDES_SPEC = DatasetSpec(
     name="aedes",
     label="Aedes (mosquito brain)",
     species="Aedes aegypti",
+    description=(
+        "An EM volume of the brain of the yellow fever mosquito, from the Wei-Chung "
+        "Lee lab - the substrate for an in-progress whole-brain connectome (a Wellcome "
+        "Discovery Award, with Jefferis, Marin and Younger). There is no paper for this "
+        "dataset yet, so connecto cites none."
+    ),
+    # Deliberately empty. The Lee lab *has* a published mosquito preprint (Bao et al.
+    # 2025, on CO2 sensitivity), but its Data Availability statement describes a
+    # different, partial volume - the posterior antennal lobes, served over CATMAID -
+    # and never mentions this datastack. Citing it here would put the wrong paper in
+    # somebody's methods section, so: nothing, until there is a paper for *this*.
+    publications=(),
+    links={
+        "project": (
+            "https://flyconnecto.me/2025/05/07/"
+            "new-project-an-aedes-aegypti-brain-connectome/"
+        ),
+    },
+    public=False,
+    access=(
+        "Pre-publication. The `wclee_aedes_brain` datastack is not documented publicly "
+        "and appears to be restricted to project members - ask the Lee lab or the "
+        "whole-brain connectome project for a CAVE account with access."
+    ),
     backends=(
         BackendSpec(
             "cave",
@@ -45,16 +76,38 @@ AEDES_SPEC = DatasetSpec(
             nucleus_table="nuclei_v1_aedes",
         ),
     ),
-    # No annotation source: the datastack has no annotation table at all.
-    annotation_sources=(),
-    fields={},
+    annotation_sources=(
+        # Not a CAVE table - the datastack has none - but FlyTable (SeaTable): the
+        # `aedes_main` table in the `aedes` base. Lab-internal, so `public=False`
+        # and it needs a SEATABLE_TOKEN. `root_id` is a CAVE root ID, so it joins
+        # straight onto everything the CAVE backend returns.
+        AnnotationSource(
+            "flytable", "seatable", "aedes.aedes_main",
+            id_column="root_id", public=False,
+        ),
+    ),
+    fields={
+        "type": ("type", "flywire_type"),
+        "side": ("side",),
+        # aedes_main has both a fine `class` (KC, CX, ALSN, LHN, ...) and a coarse
+        # `superclass` (cb_intrinsic, cb_sensory, visual_projection, ...). The fine
+        # one wins so `ds.ids("class:KC")` works; `superclass` falls in behind it for
+        # the ~3.6k neurons with no fine class, and both survive as raw columns.
+        "class": ("class", "superclass"),
+        "nt": ("neurotransmitter_verified",),
+        "status": ("status",),
+        # No `soma`: the flytable's `soma_xyz` is one voxel-space "x,y,z" string, and
+        # somas already come from the nucleus table in nm (`.somas`). Promoting it to
+        # soma_x/y/z would quietly mix voxels into an nm frame, so it stays raw.
+    },
+    side_map=_SIDES,
     voxel_size=(16, 16, 45),
     capabilities=frozenset(
         {
-            # No Cap.ANNOTATIONS - there is nothing to annotate with.
+            # Annotations come from FlyTable, not from the (annotation-less) datastack.
             # No Cap.SYNAPSE_SCORES - the synapse table has `size`, not a score.
-            Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SKELETONS, Cap.MESHES,
-            Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.SOMAS,
+            Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SKELETONS,
+            Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.SOMAS,
             Cap.NEUROGLANCER, Cap.LIVE,
         }
     ),

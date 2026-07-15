@@ -21,7 +21,7 @@ FANC is not public. It needs the ``FANC_edit`` group, so an unprivileged token g
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec
+from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec, Publication
 
 __all__ = ["FANC_SPEC", "FANC"]
 
@@ -29,6 +29,48 @@ FANC_SPEC = DatasetSpec(
     name="fanc",
     label="FANC (female VNC)",
     species="Drosophila melanogaster",
+    description=(
+        "GridTape-TEM volume and connectome of the ventral nerve cord of an adult "
+        "*female* Drosophila: ~45M synapses and ~14,600 cell bodies, with leg and wing "
+        "motor neurons mapped to the muscles they drive. The female counterpart to "
+        "`manc` - and, unlike it, a live editable segmentation."
+    ),
+    publications=(
+        Publication(
+            authors="Azevedo A, Lesser E, Phelps JS, Mark B, et al.",
+            year=2024,
+            title="Connectomic reconstruction of a female Drosophila ventral nerve cord",
+            journal="Nature",
+            doi="10.1038/s41586-024-07389-x",
+        ),
+        Publication(
+            authors="Phelps JS, Hildebrand DGC, Graham BJ, Kuan AT, et al.",
+            year=2021,
+            title=(
+                "Reconstruction of motor control circuits in adult Drosophila using "
+                "automated transmission electron microscopy"
+            ),
+            journal="Cell",
+            doi="10.1016/j.cell.2020.12.013",
+        ),
+        Publication(
+            authors="Lesser E, Azevedo AW, Phelps JS, Elabbady L, et al.",
+            year=2024,
+            title=(
+                "Synaptic architecture of leg and wing premotor control networks in "
+                "Drosophila"
+            ),
+            journal="Nature",
+            doi="10.1038/s41586-024-07600-z",
+        ),
+    ),
+    links={"website": "https://github.com/htem/FANC_auto_recon"},
+    public=False,
+    access=(
+        "Needs the `FANC_edit` group: join the FANC community and have your Google "
+        "account authorized before you generate a CAVE token. There is no public FANC "
+        "datastack - an unprivileged token gets a 403, and a new one will not help."
+    ),
     backends=(
         BackendSpec(
             "cave",

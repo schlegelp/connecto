@@ -16,7 +16,7 @@ want a `type`, say which table's opinion you want::
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec
+from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec, Publication
 
 __all__ = ["MICRONS_SPEC", "MICrONS"]
 
@@ -24,6 +24,36 @@ MICRONS_SPEC = DatasetSpec(
     name="microns",
     label="MICrONS (minnie65) public",
     species="Mus musculus",
+    description=(
+        "A cubic millimetre of mouse visual cortex - ~1.4 x 0.87 x 0.84 mm of "
+        "serial-section EM spanning all six layers of VISp and neighbouring higher "
+        "visual areas, with >200,000 cells and ~0.5 billion synapses, co-registered "
+        "with two-photon calcium imaging of ~75,000 neurons in the same awake animal. "
+        "Structure and function in one volume."
+    ),
+    publications=(
+        Publication(
+            authors="The MICrONS Consortium (Bae JA, Baptiste M, Bishop CA, et al.)",
+            year=2025,
+            title=(
+                "Functional connectomics spanning multiple areas of mouse visual cortex"
+            ),
+            journal="Nature",
+            doi="10.1038/s41586-025-08790-w",
+        ),
+        Publication(
+            authors="Schneider-Mizell CM, Bodor AL, Brittain D, Buchanan J, et al.",
+            year=2025,
+            title="Inhibitory specificity from a connectomic census of mouse visual cortex",
+            journal="Nature",
+            doi="10.1038/s41586-024-07780-8",
+        ),
+    ),
+    links={
+        "website": "https://www.microns-explorer.org/cortical-mm3",
+        "neuroglancer": "https://ngl.microns-explorer.org",
+        "data": "https://bossdb.org/project/microns-minnie",
+    },
     backends=(
         BackendSpec(
             "cave",

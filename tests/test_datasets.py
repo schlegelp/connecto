@@ -22,12 +22,20 @@ from connecto.core.spec import MULTI_SEP, Cap
 
 def test_the_shipped_datasets_are_all_registered():
     for name in ("flywire", "banc", "fanc", "microns", "aedes",
-                 "hemibrain", "malecns", "manc", "optic-lobe", "fish2"):
+                 "hemibrain", "malecns", "manc", "fish2"):
         assert name in REGISTRY, f"{name} is not registered"
 
 
+def test_optic_lobe_is_gone():
+    """It was the optic lobes of the same specimen `malecns` now covers whole - two
+    names for one dataset, and the narrower one could only give you fewer neurons
+    under different body IDs. Registering both invited a silent mismatch."""
+    assert "optic-lobe" not in REGISTRY
+    assert not hasattr(co, "OpticLobe")
+
+
 @pytest.mark.parametrize("name", ["Aedes", "BANC", "FANC", "MANC", "FlyWire",
-                                  "Hemibrain", "MaleCNS", "MICrONS", "OpticLobe", "Fish2"])
+                                  "Hemibrain", "MaleCNS", "MICrONS", "Fish2"])
 def test_every_dataset_has_a_constructor(name):
     """MANC was registered but had no reachable constructor: the spec constant `MANC`
     shadowed it, so the factory was renamed `MANC_` and then never exported. It showed
@@ -97,25 +105,27 @@ def test_the_join_and_the_split_share_one_constant():
 # ------------------------------------------ a missing namespace says which dataset
 
 
-def test_a_dataset_without_annotations_says_so_by_name():
-    """aedes is the first dataset with no annotation table at all. Accessing the
-    namespace used to hit Dataset.__getattr__ - because CapabilityError subclasses
-    AttributeError, so the descriptor's precise error read as "lookup failed" - and
-    came back as "'CAVEDataset' object has no attribute 'annotations'"."""
+def test_a_missing_namespace_says_which_dataset():
+    """A capability a dataset lacks must raise a CapabilityError that *names the
+    dataset*, not an AttributeError about the class. aedes has no ROIs; accessing the
+    namespace used to fall through to Dataset.__getattr__ - because CapabilityError
+    subclasses AttributeError, the descriptor's precise error read as "lookup failed" -
+    and came back as "'CAVEDataset' object has no attribute 'rois'"."""
     ds = co.get_dataset("aedes")
 
     with pytest.raises(co.CapabilityError) as exc:
-        _ = ds.annotations
+        _ = ds.rois
 
     msg = str(exc.value)
     assert "Aedes" in msg  # the dataset, not the class
-    assert "annotations" in msg
+    assert "rois" in msg
     assert "CAVEDataset" not in msg
 
 
 def test_feature_detection_still_works():
     ds = co.get_dataset("aedes")
-    assert not hasattr(ds, "annotations")
+    assert not hasattr(ds, "rois")  # aedes has no ROI hierarchy
+    assert hasattr(ds, "annotations")  # ...but it does have annotations, via FlyTable
     assert hasattr(ds, "connectivity")
 
 
@@ -137,18 +147,34 @@ def test_the_synapse_score_column_comes_off_the_spec():
 
     fanc = co.get_dataset("fanc")
     assert fanc._synapse_colmap["score"] == "score"
-    assert co.get_dataset("flywire")._synapse_colmap["score"] == "cleft_score"
+    assert co.get_dataset("flywire", backend="cave")._synapse_colmap["score"] == "cleft_score"
+    # `score_column` is a CAVE table's column name. neuPrint has its own notion of a
+    # confidence score, and reads it from its own schema.
+    assert co.get_dataset("flywire")._synapse_colmap["score"] == "confidence_pre"
 
 
 # ------------------------------------------------------------- specs match reality
 
 
-def test_aedes_claims_no_annotations_and_no_scores():
+def test_aedes_gets_annotations_from_flytable_but_still_no_scores():
+    """The CAVE datastack has no annotation table; the cell typing lives in FlyTable
+    (the `aedes_main` table of the `aedes` base). So aedes *does* claim annotations -
+    from a lab-internal SeaTable source - but still no per-synapse score (the synapse
+    table has `size`, not a confidence)."""
     spec = co.get_spec("aedes")
-    assert not spec.fields
-    assert not spec.annotation_sources
-    assert Cap.ANNOTATIONS not in spec.capabilities
+    assert Cap.ANNOTATIONS in spec.capabilities
     assert Cap.SYNAPSE_SCORES not in spec.capabilities
+
+    (src,) = spec.annotation_sources
+    assert (src.name, src.kind, src.location) == ("flytable", "seatable", "aedes.aedes_main")
+    assert src.id_column == "root_id"
+    assert src.public is False  # lab-internal; needs a SEATABLE_TOKEN
+
+    # Its only source is non-public, so `auto` must still resolve to it rather than
+    # giving up - otherwise `.annotations.get()` would wrongly say "no source".
+    assert spec.annotation_source("auto") is src
+    # And it can find neurons by the fields we wired up.
+    assert "class" in spec.fields and "type" in spec.fields
 
 
 def test_aedes_uses_the_synapse_table_whose_coordinates_are_right():
@@ -158,19 +184,10 @@ def test_aedes_uses_the_synapse_table_whose_coordinates_are_right():
     assert co.get_spec("aedes").backend("cave").synapse_table == "synapses"
 
 
-def test_optic_lobe_derives_side_from_the_instance():
-    """optic-lobe:v1.1 has no `somaSide` column - side is a suffix on the instance
-    ("Tm1_R"), as in hemibrain. It also has no `class` column at all."""
-    spec = co.get_spec("optic-lobe")
-    assert "side_from_instance" in spec.derive
-    assert spec.fields["side"] == ("side_from_instance",)
-    assert "class" not in spec.fields
-
-
-@pytest.mark.parametrize("name", ["fanc", "aedes", "manc", "optic-lobe"])
+@pytest.mark.parametrize("name", ["fanc", "aedes", "manc", "malecns"])
 def test_the_new_datasets_are_conformance_testable(name):
     """example_ids are what put a dataset in the conformance suite. Without them it is
-    silently skipped - which is how manc and optic-lobe went untested."""
+    silently skipped - which is how manc went untested."""
     assert co.get_spec(name).example_ids
 
 
@@ -182,9 +199,12 @@ def test_l2_is_present_exactly_where_the_cache_is():
     skeleton fallback, so nothing could hold a dataset to the claim. Now it carries the
     `.l2` namespace, and the conformance suite checks it."""
     assert hasattr(co.get_dataset("flywire-production"), "l2")   # has an L2 cache
-    assert hasattr(co.get_dataset("banc"), "l2")
-    assert not hasattr(co.get_dataset("flywire"), "l2")          # public stack has none
+    assert hasattr(co.get_dataset("banc", backend="cave"), "l2")
+    # The public FlyWire stack has no L2 cache, on either backend.
+    assert not hasattr(co.get_dataset("flywire", backend="cave"), "l2")
     assert not hasattr(co.get_dataset("hemibrain"), "l2")        # neuPrint: no chunkedgraph
+    # ...and neuPrint never has one, even for a dataset whose CAVE copy does.
+    assert not hasattr(co.get_dataset("banc"), "l2")             # neuPrint is the default
 
 
 def test_asking_for_l2_without_a_cache_names_the_dataset():
@@ -192,6 +212,66 @@ def test_asking_for_l2_without_a_cache_names_the_dataset():
         _ = co.get_dataset("hemibrain").l2
     assert "hemibrain" in str(exc.value)
     assert "l2cache" in str(exc.value)
+
+
+# ------------------------------------------------------------------- provenance
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_dataset_says_what_it_is_and_where_it_lives(name):
+    """A dataset is somebody's years of work. The least we can do is describe it and
+    say where to find it."""
+    spec = co.get_spec(name)
+    assert spec.description, f"{name} has no description"
+    assert spec.links, f"{name} has no links"
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_dataset_cites_its_papers_or_admits_it_has_none(name):
+    """Every dataset carries citable publications - except the two that genuinely have
+    none, and those say so rather than borrowing a neighbour's paper.
+
+    This is the point of the test. It would be easy to give `aedes` the Lee lab's
+    mosquito preprint and `fish2` one of the two published zebrafish connectomes; both
+    would look right and both would be wrong, and the error would surface in somebody's
+    methods section. So the honest empty set is asserted, not tolerated."""
+    spec = co.get_spec(name)
+    if name in ("aedes", "fish2"):
+        assert spec.publications == ()
+        assert "no publication" in spec.description or "no paper" in spec.description
+        return
+    assert spec.publications, f"{name} cites nothing"
+    for pub in spec.publications:
+        assert pub.doi and pub.year and pub.authors and pub.title
+        assert pub.url == f"https://doi.org/{pub.doi}"
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_dataset_you_cannot_have_says_how_to_ask(name):
+    """`public=False` is not a secret - it is a warning that a fresh token is not
+    enough. Saying so without saying what *would* be is worse than not saying it."""
+    spec = co.get_spec(name)
+    assert spec.public == (not spec.access)
+    if not spec.public:
+        assert len(spec.access) > 40, f"{name}'s access note says too little"
+
+
+def test_the_non_public_datasets_are_the_ones_we_think():
+    got = {s.name for s in REGISTRY.values() if not s.public}
+    assert got == {"flywire-production", "fanc", "aedes", "fish2"}
+
+
+def test_a_spec_cannot_claim_privacy_without_saying_how_to_ask():
+    with pytest.raises(ValueError, match="access"):
+        co.DatasetSpec(
+            name="x", backends=(co.BackendSpec("cave", "y"),), public=False
+        )
+
+
+def test_cite_names_the_papers_and_the_access_terms():
+    text = co.get_dataset("fanc").cite()
+    assert "Azevedo" in text and "10.1038/s41586-024-07389-x" in text
+    assert "FANC_edit" in text  # non-public: the terms are part of the citation block
 
 
 @pytest.mark.parametrize("ns,call", [("skeletons", "dotprops"), ("l2", "dotprops")])
