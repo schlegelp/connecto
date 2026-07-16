@@ -163,8 +163,8 @@ That's analysis, and it belongs upstream (see
 ## Install
 
 ```bash
-pip install -e .
-pip install -e ".[clio,flytable]"   # private annotation sources
+pip install connecto
+pip install connecto[clio,flytable]"   # private annotation sources
 ```
 
 ## Credentials
