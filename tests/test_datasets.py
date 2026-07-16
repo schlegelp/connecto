@@ -177,6 +177,121 @@ def test_aedes_gets_annotations_from_flytable_but_still_no_scores():
     assert "class" in spec.fields and "type" in spec.fields
 
 
+@pytest.mark.network
+def test_flywire_flytable_concatenates_both_bases_into_clean_int_ids():
+    """Live: the two tables really do concatenate, and the `root_783` key gives clean
+    int64 ids (not float - the very bug the caveclient pin guards against), with the
+    known DA1_lPN examples present. Skipped without a SEATABLE_TOKEN."""
+    import os
+
+    if not os.environ.get("SEATABLE_TOKEN"):
+        pytest.skip("needs SEATABLE_TOKEN")
+
+    fw = co.FlyWire()
+    ann = fw.annotations.get(source="flytable")
+    # 58k central-brain + 89k optic-lobe neurons; far more than `info` alone (~58k).
+    assert len(ann) > 100_000
+    assert ann["id"].dtype == "int64"
+    assert (ann["id"] > 0).all()
+    assert set(fw.spec.example_ids) <= set(ann["id"])  # frozen 783 ids line up
+
+
+@pytest.mark.network
+def test_banc_flytable_resolves_on_the_cloud_instance():
+    """Live: BANC's flytable really is reachable on cloud.seatable.io (the old
+    `banc.main` on the lab instance 404'd), with clean int64 ids on `root_888` and
+    the known example neurons present. Skipped without a SEATABLE_TOKEN."""
+    import os
+
+    if not os.environ.get("SEATABLE_TOKEN"):
+        pytest.skip("needs SEATABLE_TOKEN")
+
+    b = co.BANC()
+    ann = b.annotations.get(source="flytable")
+    assert len(ann) > 100_000
+    assert ann["id"].dtype == "int64"
+    assert (ann["id"] > 0).all()
+    assert set(b.spec.example_ids) <= set(ann["id"])  # frozen 888 ids line up
+
+
+def test_flywire_flytable_is_two_bases_keyed_on_the_frozen_root():
+    """FlyWire's live annotations are two SeaTable tables in two different bases -
+    the central brain in `main.info`, the optic lobes in `optic_lobes.optic` -
+    concatenated. Reading only `info` silently drops ~89k optic-lobe neurons. And the
+    public release is frozen at mat 783, so its id column is `root_783`, not the live
+    `root_id` that tracks edits - otherwise every edited neuron mis-joins in silence."""
+    from connecto.sources.seatable import _table_specs
+
+    pub = co.get_spec("flywire").annotation_source("flytable")
+    assert pub.location == "main.info,optic_lobes.optic"
+    assert _table_specs(pub) == [("main", "info"), ("optic_lobes", "optic")]
+    assert pub.id_column == "root_783"  # frozen release
+    assert pub.public is False  # lab-internal; needs a SEATABLE_TOKEN
+
+    # Production is the *same* two tables but live, so it keys on `root_id`. A shared
+    # source with one static id column cannot be right for both, so they diverge.
+    prod = co.get_spec("flywire-production").annotation_source("flytable")
+    assert prod.location == pub.location
+    assert prod.id_column == "root_id"  # live release
+
+
+def test_seatable_sources_declare_which_deployment_they_live_on():
+    """SeaTable is not one server. FlyWire and aedes are on the lab's own instance
+    ('flytable'); BANC's `banc_meta` is on the official cloud ('seatable'). A base
+    named on one does not exist on the other, so the instance must be explicit."""
+    from connecto.sources.seatable import _INSTANCES, _server
+
+    fw = co.get_spec("flywire").annotation_source("flytable")
+    aedes = co.get_spec("aedes").annotation_source("flytable")
+    banc = co.get_spec("banc").annotation_source("flytable")
+
+    assert fw.instance == "flytable" and aedes.instance == "flytable"
+    assert banc.instance == "seatable"
+
+    # flytable -> the SEATABLE_SERVER env default (None); seatable -> the cloud URL.
+    assert _server(fw) is None
+    assert _server(banc) == "https://cloud.seatable.io/"
+    assert set(_INSTANCES) >= {"flytable", "seatable"}
+
+
+def test_banc_flytable_points_at_the_cloud_banc_meta_keyed_on_the_frozen_root():
+    """BANC's live annotations are `banc_meta` on cloud.seatable.io - not the lab's
+    flytable instance, where the old `banc.main` did not even exist. And BANC is
+    frozen at CAVE mat 888, so the id column is `root_888`, not the live `root_id`."""
+    banc = co.get_spec("banc").annotation_source("flytable")
+    assert (banc.kind, banc.location, banc.instance) == ("seatable", "banc_meta.banc_meta", "seatable")
+    assert banc.id_column == "root_888"  # frozen release, like FlyWire's root_783
+    assert banc.public is False
+
+
+def test_an_unknown_seatable_instance_is_a_loud_error_not_a_silent_default():
+    """Fat-fingering the instance must fail with the known names, not quietly fall
+    back to one deployment and 404 on a base that lives on the other."""
+    import pytest
+
+    from connecto.core.spec import AnnotationSource
+    from connecto.sources.seatable import _server
+
+    bad = AnnotationSource("flytable", "seatable", "x.y", instance="nope")
+    with pytest.raises(ValueError, match="Unknown SeaTable instance"):
+        _server(bad)
+
+
+def test_table_specs_parses_base_qualified_and_bare_locations():
+    """The `base.table` convention is what keeps SeaTable fast: named, resolution is
+    ~1s; bare, seaserpent searches every base (~20s). A bare location still parses -
+    to `(None, table)` - but every shipped source names its base."""
+    from connecto.core.spec import AnnotationSource
+    from connecto.sources.seatable import _table_specs
+
+    one = AnnotationSource("flytable", "seatable", "aedes.aedes_main")
+    two = AnnotationSource("flytable", "seatable", "main.info,optic_lobes.optic")
+    bare = AnnotationSource("flytable", "seatable", "info")
+    assert _table_specs(one) == [("aedes", "aedes_main")]
+    assert _table_specs(two) == [("main", "info"), ("optic_lobes", "optic")]
+    assert _table_specs(bare) == [(None, "info")]
+
+
 def test_aedes_uses_the_synapse_table_whose_coordinates_are_right():
     """`synapses_v2` is newer and 23% larger, but CAVE has it registered at the
     datastack's 16x16x45 voxel size while its coordinates are already in nm. connecto

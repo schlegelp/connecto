@@ -195,6 +195,25 @@ The two are independent axes, and they genuinely cross: `cn.BANC(backend="neupri
 reads its **edges** from neuPrint and its **annotations** from CAVE, because that is
 where each actually lives.
 
+A `seatable` source names its table as `base.table`, and *names the base for a
+reason*: without it, SeaTable has to search every base your token can see to find the
+table (~20s for a big one); with it, resolution is ~1s. A source can even be several
+tables — `location="main.info,optic_lobes.optic"` — which connecto concatenates, which
+is exactly how FlyWire's live annotations span a central-brain and an optic-lobe table.
+Its freshness token folds in every table, so an edit to any of them re-fetches.
+
+SeaTable is also not one server. The lab runs its own deployment (`instance="flytable"`,
+the default, reached via `SEATABLE_SERVER`) and there is the official `cloud.seatable.io`
+(`instance="seatable"`) — and a base named on one does not exist on the other. FlyWire
+and aedes are on flytable; BANC's `banc_meta` is on the cloud, so it sets
+`instance="seatable"`. A new deployment is one line in `connecto.sources.seatable._INSTANCES`.
+
+```python
+# BANC's live annotations live on the official cloud, not the lab instance
+AnnotationSource("flytable", "seatable", "banc_meta.banc_meta",
+                 instance="seatable", id_column="root_888", public=False)
+```
+
 ## Adding a whole backend
 
 If you need to support something that is neither CAVE nor neuPrint, subclass `Dataset`

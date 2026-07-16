@@ -61,9 +61,18 @@ _FIELDS = {
 # FlyWire already speaks left/right/center. "na" is not a side.
 _SIDES = {"left": "left", "right": "right", "center": "center"}
 
+# FlyWire's live FlyTable annotations are *two* SeaTable tables in two bases - the
+# central brain in `main.info`, the optic lobes in `optic_lobes.optic` -
+# concatenated, exactly as cocoa assembles them. Reading only `info` silently drops
+# ~89k optic-lobe neurons. The id column is `root_783`, not the live `root_id`: this
+# is the frozen public release (materialization 783), so an id that tracks live
+# edits would mis-join every neuron that has been edited since. Production, below,
+# is live and keys on `root_id` instead.
+_FLYTABLE = "main.info,optic_lobes.optic"
+
 _ANNOTATIONS = (
     AnnotationSource("public", "github_tsv", ANNOTATIONS_URL, id_column="root_id"),
-    AnnotationSource("flytable", "seatable", "info", id_column="root_id", public=False),
+    AnnotationSource("flytable", "seatable", _FLYTABLE, id_column="root_783", public=False),
 )
 
 _CAPS = {
@@ -84,7 +93,7 @@ FLYWIRE = DatasetSpec(
         "The whole brain of an adult female Drosophila at synapse resolution, "
         "proofread by the FlyWire community from the FAFB serial-section TEM volume. "
         "The v783 public release has 139,255 neurons and ~50M synapses, with "
-        "community cell typing and predicted transmitters."
+        "comprehensive hierarchical annotations."
     ),
     publications=_PUBS,
     links=_LINKS,
@@ -193,6 +202,16 @@ FLYWIRE_PRODUCTION = FLYWIRE.evolve(
     # Production is live and editable, and unlike the public stack it does have an
     # L2 cache.
     capabilities=frozenset(_CAPS | {Cap.LIVE, Cap.L2CACHE}),
+    # Same two FlyTable tables, but keyed on the *live* `root_id`: production root IDs
+    # are the current ones, so `root_783` (a frozen-release column) would be wrong
+    # here in exactly the way it is right for the public release. The public GitHub
+    # TSV stays as the default source - it is a 783 artefact, so on a live handle it
+    # only lines up for neurons untouched since 783, but that is a pre-existing limit
+    # of a static annotation file, not something the FlyTable source should inherit.
+    annotation_sources=(
+        AnnotationSource("public", "github_tsv", ANNOTATIONS_URL, id_column="root_id"),
+        AnnotationSource("flytable", "seatable", _FLYTABLE, id_column="root_id", public=False),
+    ),
     example_ids=(),
 )
 

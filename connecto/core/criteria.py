@@ -221,7 +221,7 @@ def resolve_criteria(crit: NeuronCriteria, ds, *, version=None) -> np.ndarray:
             raise ValueError("Empty neuron query.")
         return ids
 
-    ann = ds.annotations.get(version=version)
+    ann = ds.annotations.get(version=version, verbose=False)
     use_regex = bool(crit.regex) and crit.regex != "auto"
 
     mask = pd.Series(True, index=ann.index)

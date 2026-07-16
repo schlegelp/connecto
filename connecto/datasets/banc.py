@@ -91,7 +91,15 @@ BANC_SPEC = DatasetSpec(
             chunked=True,
             pivot=("classification_system", "cell_type"),
         ),
-        AnnotationSource("flytable", "seatable", "banc.main", id_column="root_id", public=False),
+        # BANC's live annotations live on the *official* SeaTable cloud (base
+        # `banc_meta`), not the lab's own flytable instance - so `instance="seatable"`.
+        # Like FlyWire, this is a frozen release (CAVE mat 888), so it keys on the
+        # `root_888` column, not the live `root_id` that tracks edits; a neuron edited
+        # since 888 would otherwise mis-join in silence.
+        AnnotationSource(
+            "flytable", "seatable", "banc_meta.banc_meta",
+            instance="seatable", id_column="root_888", public=False,
+        ),
     ),
     fields={
         "type": ("cell_type", "fafb_783_cell_type", "malecns_09_cell_type", "manc_121_cell_type"),

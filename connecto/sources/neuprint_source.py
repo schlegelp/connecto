@@ -4,7 +4,21 @@ from __future__ import annotations
 
 import pandas as pd
 
-__all__ = ["fetch_neuprint"]
+__all__ = ["fetch_neuprint", "neuprint_freshness"]
+
+
+def neuprint_freshness(source, ds) -> str | None:
+    """neuPrint's own record of when the database was last edited, or None.
+
+    A published dataset (hemibrain) never changes it, so the token is stable and the
+    cache is permanent. The live-curated ones (maleCNS, fish2) bump it on every
+    segment-property update *without* changing the version tag - which the version key
+    alone would miss. Free: ``meta`` is already on the client.
+    """
+    try:
+        return str(ds.client.meta.get("lastDatabaseEdit") or "") or None
+    except Exception:
+        return None
 
 
 def fetch_neuprint(source, ds, version) -> pd.DataFrame:

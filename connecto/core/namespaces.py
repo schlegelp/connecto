@@ -34,8 +34,42 @@ class _Namespace:
         return f"<{type(self).__name__} of {self._ds.label}: {', '.join(methods)}>"
 
 
+_SOURCE_KINDS = {
+    "seatable": "FlyTable",
+    "github_tsv": "public TSV",
+    "cave_table": "CAVE table",
+    "neuprint": "neuPrint",
+    "clio": "Clio",
+}
+
+
+def _source_phrase(src) -> str:
+    """A short human tag for where an annotation source's data lives.
+
+    The table/base is worth showing for SeaTable and CAVE (``FlyTable main.info``);
+    a ``github_tsv`` location is a long URL, so it is left off. For SeaTable it also
+    names the *deployment* - ``FlyTable`` for the lab's own instance, the host
+    (``cloud.seatable.io``) for a named cloud one - because the same base name can
+    live on either and knowing which one you hit is the whole point of the feedback.
+    """
+    if src.kind == "seatable":
+        from ..sources.seatable import _INSTANCES
+
+        server = _INSTANCES.get(getattr(src, "instance", "flytable"))
+        where = "FlyTable" if server is None else server.split("//")[-1].strip("/")
+        return f"{where} {src.location}".rstrip()
+    kind = _SOURCE_KINDS.get(src.kind, src.kind)
+    if src.kind == "cave_table" and src.location:
+        return f"{kind} {src.location}"
+    return kind
+
+
 class Annotations(_Namespace):
     """Neuron metadata: types, sides, classes, somas."""
+
+    def __init__(self, ds):
+        super().__init__(ds)
+        self._memo: dict = {}  # per-handle: (source, version) -> raw table
 
     @requires(Cap.ANNOTATIONS)
     def get(
@@ -47,6 +81,7 @@ class Annotations(_Namespace):
         raw: bool = False,
         version=None,
         units: str = "nm",
+        verbose: bool = True,
         **filters,
     ) -> pd.DataFrame:
         """Annotations, with canonical columns added and every raw column kept.
@@ -55,6 +90,10 @@ class Annotations(_Namespace):
         coalesced from ``spec.fields["type"]`` in priority order; ``side`` is
         mapped to ``left``/``right``/``center``. Pass ``raw=True`` for the
         untouched backend frame.
+
+        ``verbose`` (default ``True``) prints one line saying which source is being
+        read and whether it came from the remote server, the local cache, or a
+        cache refresh. Set it ``False`` to silence that.
         """
         ds = self._ds
         v = ds._resolve_version_arg(version)
@@ -68,7 +107,7 @@ class Annotations(_Namespace):
                 f"{ds.label} has no annotation source configured."
             )
 
-        table = self._table(src, v)
+        table = self._table(src, v, verbose=verbose)
 
         if raw:
             return table.copy()
@@ -89,19 +128,68 @@ class Annotations(_Namespace):
 
         return ann
 
-    def _table(self, src, version) -> pd.DataFrame:
-        """Fetch (and cache) the whole annotation table for a source."""
+    def _table(self, src, version, *, verbose: bool = False) -> pd.DataFrame:
+        """Fetch (and cache) the whole annotation table for a source.
+
+        Two layers. The per-handle memo keeps a session consistent and cheap: a
+        handle is pinned to one version, so it reads a source once and reuses it -
+        which is exactly why ``at()`` returns a fresh handle instead of mutating.
+        Under it, the on-disk cache is keyed by a *freshness token* (see
+        ``sources.freshness``), so a *new* handle re-reads a live source that has been
+        edited since, and a frozen one is served from disk forever.
+
+        ``verbose`` narrates that decision - which source, and whether it came from
+        the session memo, the on-disk cache, or the remote server. It stays off for
+        the internal callers (criteria resolution, ``ids``/``search``) so that only a
+        direct ``annotations.get()`` speaks.
+        """
         ds = self._ds
-        key = _cache.CacheEntry(ds.name, version, f"annotations_{src.name}", src.location)
+
+        def say(action: str) -> None:
+            if verbose:
+                print(f"{ds.label}: '{src.name}' annotations "
+                      f"[{_source_phrase(src)}] - {action}", flush=True)
+
+        memo_key = (src.name, str(version))
+        if memo_key in self._memo:
+            say("already loaded this session.")
+            return self._memo[memo_key]
+
+        from ..sources import freshness
+
+        token = freshness(src, ds, version)
+        key = _cache.CacheEntry(
+            ds.name, version, f"annotations_{src.name}", src.location, token
+        )
         if key.exists():
-            return key.read()
-        table = ds._fetch_annotations(src, version)
-        return key.write(table)
+            # A live source (token set) had its freshness re-checked to get here; a
+            # frozen one is simply pinned by the version. Say which, so a stale-looking
+            # result is never a mystery.
+            say("up to date in local cache (re-validated against the source)."
+                if token is not None else "reading from local cache.")
+            table = key.read()
+        elif not _cache.enabled():
+            say("downloading from remote (caching is disabled)...")
+            table = key.write(ds._fetch_annotations(src, version))
+        elif key.superseding():
+            # A stale file under an older freshness token is still on disk: the source
+            # has moved on since we last cached it, so this is a refresh, not a first
+            # fetch. `supersede` then removes the file it replaced.
+            say("source has changed - refreshing the local cache from remote...")
+            table = key.write(ds._fetch_annotations(src, version))
+            key.supersede()
+        else:
+            say("downloading from remote (caching for next time)...")
+            table = key.write(ds._fetch_annotations(src, version))
+            key.supersede()
+
+        self._memo[memo_key] = table
+        return table
 
     @requires(Cap.ANNOTATIONS)
     def search(self, term: str, *, version=None, regex: bool = True) -> pd.DataFrame:
         """Rows whose `type`, `class` or `instance` matches ``term``."""
-        ann = self.get(version=version)
+        ann = self.get(version=version, verbose=False)
         cols = [c for c in ("type", "class", "instance") if c in ann.columns]
         mask = pd.Series(False, index=ann.index)
         for col in cols:
@@ -116,7 +204,8 @@ class Annotations(_Namespace):
     @requires(Cap.ANNOTATIONS)
     def ids(self, *, version=None) -> np.ndarray:
         """Every annotated neuron in the dataset."""
-        return np.unique(self.get(version=version)["id"].to_numpy(dtype="int64"))
+        got = self.get(version=version, verbose=False)
+        return np.unique(got["id"].to_numpy(dtype="int64"))
 
     @property
     def sources(self) -> list[str]:

@@ -305,7 +305,7 @@ def _labels(ds, ids, by, version=None) -> np.ndarray:
     any of them *are*. connecto does, so `color_by="type"` is one word.
     """
     if isinstance(by, str):
-        ann = ds.annotations.get(ids, version=version)
+        ann = ds.annotations.get(ids, version=version, verbose=False)
         if by not in ann.columns:
             available = ", ".join(c for c in ann.columns if c != "id")
             raise ValueError(

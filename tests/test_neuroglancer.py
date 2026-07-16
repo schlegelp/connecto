@@ -71,7 +71,7 @@ class _Client:
 
 
 class _Annotations:
-    def get(self, x=None, version=None):
+    def get(self, x=None, version=None, verbose=True):
         return _ANN[_ANN["id"].isin(list(x))] if x is not None else _ANN
 
 

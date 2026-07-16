@@ -255,6 +255,14 @@ class AnnotationSource:
     location: str = ""  # table name / URL / SeaTable base
     id_column: str = "root_id"
     public: bool = True  # non-public sources are skipped by annotations="auto"
+
+    # Which SeaTable *deployment* a `seatable` source lives on. SeaTable is not one
+    # server: the lab runs its own ("flytable", the default), and there is the
+    # official "seatable" cloud - and a base named on one does not exist on the other.
+    # FlyWire and aedes are on flytable; BANC's `banc_meta` is on the cloud. Ignored
+    # for non-seatable kinds; the name maps to a URL in `connecto.sources.seatable`.
+    instance: str = "flytable"
+
     chunked: bool = False  # fetch in chunks (BANC's codex_annotations needs this)
 
     # Some tables are long-format: one row per (id, key, value), rather than one

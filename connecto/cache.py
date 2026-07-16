@@ -5,12 +5,25 @@ Layout::
     ~/.connecto/cache/<dataset>/<version>/<kind>_<hash>.feather
     ~/.connecto/cache/_http/<sha1(url)>.<ext>
 
-The cache key includes a *content hash*, so a stale entry can never be served:
+Staleness is handled by what goes into the key, and that differs by what the source
+is (see :func:`connecto.sources.freshness` and ``Annotations._table``):
 
-* CAVE tables hash ``get_table_metadata(table)["last_modified"]`` - if the table
-  is re-ingested the key changes and we re-download.
-* neuPrint datasets are immutable, so the version string *is* the content hash and
-  annotations can be cached forever.
+* A **materialization** is frozen, so a CAVE annotation table and a neuPrint version
+  string are content-stable at a given version - the version in the key is enough,
+  and a frozen dataset caches forever.
+* The **live** sources are not: FlyTable (SeaTable) is edited daily and is
+  independent of any materialization, and a neuPrint instance can be re-curated under
+  the same version tag. For those a *freshness token* joins the key - SeaTable's
+  ``COUNT(*)``/``MAX(_mtime)``, neuPrint's ``lastDatabaseEdit`` - so it turns over
+  exactly when the source does. ``CacheEntry.supersede`` then drops the file it
+  replaced, so a live source keeps one entry, not one per edit.
+
+Frames are written as Feather, falling back to pickle for the ones Arrow cannot
+hold - a SeaTable table with a mixed ``int``/``str`` object column, say. Without
+that fallback such a frame *silently never cached*: the write raised, the entry was
+deleted, and the next call re-downloaded the lot (aedes' FlyTable annotations,
+17k rows, on every ``.annotations.get()``). Pickle round-trips the frame exactly,
+so a cache hit is byte-for-byte what a miss would have returned.
 
 We cache annotation tables, ROI hierarchies and HTTP downloads - things that are
 large, slow, and fetched over and over. We deliberately do **not** cache
@@ -61,26 +74,80 @@ def _hash(*parts) -> str:
 
 
 class CacheEntry:
-    """A single cached DataFrame."""
+    """A single cached DataFrame.
+
+    Stored as Feather where possible and pickle otherwise, under the same stem.
+    ``read``/``exists`` prefer whichever is present (Feather first).
+    """
 
     def __init__(self, dataset: str, version, kind: str, *key_parts):
-        self.path = cache_dir(dataset, str(version)) / f"{kind}_{_hash(*key_parts)}.feather"
+        d = cache_dir(dataset, str(version))
+        stem = d / f"{kind}_{_hash(*key_parts)}"
+        self.path = Path(f"{stem}.feather")
+        self._pickle = Path(f"{stem}.pkl")
+        self._family = (d, f"{kind}_")
+
+    def supersede(self) -> None:
+        """Delete other entries in this ``(dataset, version, kind)`` family.
+
+        For the annotation cache only, where a *freshness token* is part of the key:
+        when a live source is edited the token turns over and a new file is written,
+        so without this the old snapshots would pile up, one per edit. Kept opt-in on
+        purpose - the connectivity cache deliberately holds many entries under the one
+        ``edges`` kind, and sweeping those would throw away good caches.
+        """
+        d, prefix = self._family
+        keep = {self.path.name, self._pickle.name}
+        for f in d.glob(f"{prefix}*"):
+            if f.name not in keep:
+                f.unlink(missing_ok=True)
+
+    def superseding(self) -> bool:
+        """True if writing this entry would replace a *different* one in its family.
+
+        For user feedback only: it distinguishes "the source changed, so we are
+        refreshing a stale cache" from "nothing was cached, so we are downloading
+        fresh". A live source whose freshness token turned over leaves an older file
+        behind that :meth:`supersede` will then remove.
+        """
+        d, prefix = self._family
+        keep = {self.path.name, self._pickle.name}
+        return any(f.name not in keep for f in d.glob(f"{prefix}*"))
+
+    def _hit(self) -> Path | None:
+        """The stored file for this key, Feather preferred, or None."""
+        if not enabled():
+            return None
+        if self.path.exists():
+            return self.path
+        if self._pickle.exists():
+            return self._pickle
+        return None
 
     def exists(self) -> bool:
-        return enabled() and self.path.exists()
+        return self._hit() is not None
 
     def read(self) -> pd.DataFrame:
-        return pd.read_feather(self.path)
+        hit = self._hit()
+        return pd.read_pickle(hit) if hit.suffix == ".pkl" else pd.read_feather(hit)
 
     def write(self, df: pd.DataFrame) -> pd.DataFrame:
         if not enabled():
             return df
+        # Feather can't round-trip a non-default index; reset it for both formats.
+        df = df.reset_index(drop=True)
         try:
-            # Feather can't round-trip a non-default index or object columns of
-            # mixed type; a failure to cache must never fail the query.
-            df.reset_index(drop=True).to_feather(self.path)
+            df.to_feather(self.path)
+            self._pickle.unlink(missing_ok=True)  # one canonical copy per key
         except Exception:
+            # Feather can't hold this frame - an object column of mixed type, say.
+            # Fall back to pickle rather than never caching it (which just silently
+            # re-downloads every call). A failure to cache must never fail the query.
             self.path.unlink(missing_ok=True)
+            try:
+                df.to_pickle(self._pickle)
+            except Exception:
+                self._pickle.unlink(missing_ok=True)
         return df
 
 

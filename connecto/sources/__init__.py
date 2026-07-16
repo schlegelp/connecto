@@ -17,7 +17,27 @@ import pandas as pd
 
 from ..core.spec import MULTI_SEP, AnnotationSource
 
-__all__ = ["fetch"]
+__all__ = ["fetch", "freshness"]
+
+
+def freshness(source: AnnotationSource, ds, version) -> str | None:
+    """A token that changes when the source's content does, or None if we can't tell.
+
+    Folded into the annotation cache key so a *live* source (FlyTable, a re-curated
+    neuPrint) turns the cache over exactly when it is edited, while a frozen one
+    yields a stable token and caches forever. None means "the version already scopes
+    it": a CAVE table is frozen at its materialization, and FlyWire's GitHub TSV is a
+    per-release artefact keyed by the release. See :mod:`connecto.cache`.
+    """
+    if source.kind == "seatable":
+        from .seatable import seatable_freshness
+
+        return seatable_freshness(source, ds)
+    if source.kind == "neuprint":
+        from .neuprint_source import neuprint_freshness
+
+        return neuprint_freshness(source, ds)
+    return None
 
 
 def fetch(source: AnnotationSource, ds, version) -> pd.DataFrame:

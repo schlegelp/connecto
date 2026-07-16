@@ -318,12 +318,19 @@ def normalize_annotations(
     df = _coerce(df, ANNOTATION_DTYPES)
 
     # Root ID 0 means "no segment": CAVE annotation tables carry rows whose point
-    # doesn't land on anything (MICrONS has thousands). They are not neurons, and
-    # leaving them in means `ds.ids(...)` can hand you a 0 to query with.
+    # doesn't land on anything (MICrONS has thousands). A *null* ID means the neuron
+    # has no root at this materialization - a live FlyTable row with no `root_783`,
+    # say. Neither is a queryable neuron, and a surviving null is worse than useless:
+    # it coerces the whole `id` column to float64, the very root-ID-as-float bug the
+    # `caveclient>=8.0` pin exists to avoid. So drop both and keep `id` an honest int.
+    invalid = 0
     if "id" in df.columns:
-        invalid = int((df["id"] <= 0).sum())
+        ids = pd.to_numeric(df["id"], errors="coerce")
+        keep = (ids.notna() & (ids > 0)).to_numpy()
+        invalid = int((~keep).sum())
         if invalid:
-            df = df[df["id"] > 0].reset_index(drop=True)
+            df = df[keep].reset_index(drop=True)
+        df["id"] = pd.to_numeric(df["id"], errors="coerce").astype("int64")
 
     df = _order(
         df,
