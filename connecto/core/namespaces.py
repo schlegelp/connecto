@@ -20,7 +20,7 @@ from .criteria import to_criteria
 from .dataset import UNSET, requires
 from .spec import Cap
 
-__all__ = ["Annotations", "Connectivity", "Skeletons", "Meshes", "ROIs", "Viz"]
+__all__ = ["Annotations", "Connectivity", "Skeletons", "Meshes", "Voxels", "ROIs", "Viz"]
 
 
 class _Namespace:
@@ -526,6 +526,141 @@ class Meshes(_Namespace):
             n.name = str(nid)
             neurons.append(n)
         return navis.NeuronList(neurons)
+
+
+class Voxels(_Namespace):
+    """Sparse volumes: every voxel belonging to a neuron.
+
+    The one namespace whose cost varies by three orders of magnitude between
+    datasets, so it is also the one that talks about cost. DVID and the aedes
+    service keep a per-body index and answer in a single request; a chunkedgraph
+    keeps none, and the same question there means reading dense blocks and masking
+    them. ``estimate()`` says which you are in for before you commit to it.
+    """
+
+    @requires(Cap.VOXELS)
+    def get(
+        self,
+        x,
+        *,
+        scale: int | None = None,
+        output: str = "navis",
+        units: str = "voxel",
+        version=None,
+        progress: bool = True,
+        verbose: bool = False,
+        **opts,
+    ):
+        """Sparse volumes for the given neurons.
+
+        Parameters
+        ----------
+        scale :     int, optional
+                    Pyramid level; each level halves resolution. Defaults to
+                    something that returns a usable neuron without reading the whole
+                    brain - **not** 0, which for a hemibrain neuron is 1.17 billion
+                    voxels. ``ds.voxels.scales()`` lists what is available.
+        output :    "navis" | "raw" | "rle"
+                    ``navis`` gives ``VoxelNeuron``s; ``raw`` a dict of ``(N, 3)``
+                    arrays; ``rle`` a dict of ``(M, 4)`` runs, which is ~20x smaller
+                    and is what the wire already carries.
+        units :     "voxel" | "nm"
+                    Coordinate space of ``raw`` output. ``navis`` output is always
+                    voxels *plus* the units metadata navis expects, so it plots and
+                    measures in nm regardless.
+        """
+        if units not in ("voxel", "nm"):
+            raise ValueError(f"`units` must be 'voxel' or 'nm', got {units!r}.")
+        if output not in ("navis", "raw", "rle"):
+            raise ValueError(
+                f"`output` must be 'navis', 'raw' or 'rle', got {output!r}."
+            )
+
+        from .. import voxels as _voxels
+
+        ds = self._ds
+        ds._resolve_version_arg(version)
+        ids = ds.ids(x, version=version)
+        if scale is None:
+            scale = _voxels.default_scale(ds)
+
+        from tqdm.auto import tqdm
+
+        out = []
+        for nid in tqdm(
+            ids, desc="Voxels", disable=not progress or len(ids) < 2, leave=False
+        ):
+            runs, resolution, stats = _voxels.fetch(ds, int(nid), scale, **opts)
+            if verbose:
+                print(f"{nid}: {_voxels.rle.run_voxel_count(runs):,} voxels @ {resolution} nm | {stats}")
+            out.append((int(nid), runs, resolution))
+
+        if output == "rle":
+            return {nid: runs for nid, runs, _ in out}
+
+        if output == "raw":
+            return {
+                nid: (
+                    _voxels.to_nm(_voxels.rle.decode_runs(runs), res)
+                    if units == "nm"
+                    else _voxels.rle.decode_runs(runs)
+                )
+                for nid, runs, res in out
+            }
+
+        import navis
+
+        neurons = []
+        for nid, runs, res in out:
+            # VoxelNeuron carries its own nm-per-voxel, so the coordinates stay in
+            # the (compact, integral) voxel grid and navis still measures in nm.
+            # Multiplying them out here would inflate the array and lose that.
+            #
+            # Units go in as a per-axis vector because these grids are routinely
+            # anisotropic - aedes is 32x32x45, fish2 at scale 3 is 256x256x240 - and
+            # a single scalar would be right about X and wrong about Z.
+            n = navis.VoxelNeuron(
+                _voxels.rle.decode_runs(runs),
+                id=nid,
+                units=(
+                    f"{res[0]} nm"
+                    if len(set(res)) == 1
+                    else [f"{r} nm" for r in res]
+                ),
+            )
+            n.name = str(nid)
+            neurons.append(n)
+        return navis.NeuronList(neurons)
+
+    @requires(Cap.VOXELS)
+    def estimate(self, x, *, scale: int | None = None, version=None) -> pd.DataFrame:
+        """What ``get()`` would cost, without doing it.
+
+        Meaningful mainly on the CAVE route, where the answer is a dense read whose
+        size the caller controls. The indexed routes just say so.
+        """
+        from .. import voxels as _voxels
+
+        ds = self._ds
+        # Validates the version even though the volume is read from the handle's own
+        # source, so a bad `version=` raises here rather than being ignored.
+        ds._resolve_version_arg(version)
+        ids = ds.ids(x, version=version)
+        if scale is None:
+            scale = _voxels.default_scale(ds)
+        return pd.DataFrame([_voxels.estimate(ds, int(i), scale) for i in ids])
+
+    @requires(Cap.VOXELS)
+    def scales(self) -> tuple[int, ...]:
+        """Which scales this dataset serves.
+
+        That a scale is *available* says nothing about whether it is *affordable* -
+        every CAVE dataset lists scale 0 and none of them can deliver a whole neuron
+        at it. Use :meth:`estimate` for the cost.
+        """
+        from .. import voxels as _voxels
+
+        return _voxels.scales(self._ds)
 
 
 class ROIs(_Namespace):

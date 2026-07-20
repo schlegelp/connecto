@@ -117,6 +117,7 @@ FANC_SPEC = DatasetSpec(
             Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SYNAPSE_SCORES,
             Cap.SKELETONS, Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH,
             Cap.PROOFREADING, Cap.SOMAS, Cap.NEUROGLANCER, Cap.LIVE,
+            Cap.VOXELS,
         }
     ),
     # Two MDNs (moonwalker descending neurons). Safe to pin on a live, editable

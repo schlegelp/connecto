@@ -22,6 +22,7 @@ from ...core.namespaces import (
     Skeletons,
     Somas,
     Viz,
+    Voxels,
 )
 from ...core.segmentation import Segmentation
 from ...core.spec import Cap
@@ -55,6 +56,7 @@ class CAVEDataset(Dataset):
     connectivity = namespace(Connectivity, Cap.CONNECTIVITY)
     skeletons = namespace(Skeletons, Cap.SKELETONS)
     meshes = namespace(Meshes, Cap.MESHES)
+    voxels = namespace(Voxels, Cap.VOXELS)
     rois = namespace(ROIs, Cap.ROIS)
     somas = namespace(Somas, Cap.SOMAS)
     viz = namespace(Viz, Cap.NEUROGLANCER)

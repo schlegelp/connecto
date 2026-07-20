@@ -31,6 +31,11 @@ dependencies = [
 [project.optional-dependencies]
 clio = ["clio-py"]
 flytable = ["sea-serpent"]
+# Masking a dense cutout down to one root means testing every voxel against a
+# ~27,000-element supervoxel manifest. fastremap does that far faster than
+# `np.isin`; `connecto.voxels.pcg` falls back to numpy without it, so this buys
+# speed on the CAVE sparse-volume path and nothing else.
+voxels = ["fastremap>=1.14"]
 # ruff >=0.15: older versions still enable the deprecated UP038 via the `UP` prefix,
 # which flags every isinstance(x, (int, np.integer)) in the codebase. Ruff deprecated
 # that rule because the `X | Y` form it suggests is slower and not recommended.

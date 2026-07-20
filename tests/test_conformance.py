@@ -109,6 +109,84 @@ def test_skeletons_are_navis_neurons_in_nm(ds):
     assert n.n_nodes > 1, f"{ds.label} returned a degenerate skeleton"
 
 
+def test_voxels_are_sparse_volumes_of_the_right_neuron(ds):
+    """Every declared VOXELS route returns real voxels, in a real place.
+
+    The containment check is the one that matters. All three routes could plausibly
+    return a well-formed array of the wrong thing - the DVID route by addressing the
+    wrong node, the dense route by mis-converting the chunk grid at a coarse scale -
+    and neither would look wrong. Landing inside the neuron's own mesh is the
+    independent evidence that it is the right neuron.
+    """
+    if not ds.supports(Cap.VOXELS):
+        pytest.skip("no voxels")
+
+    import navis
+
+    from connecto import voxels as _voxels
+
+    body = ds.spec.example_ids[0]
+    # Whatever the route picks for itself. Hard-coding a coarse scale here is what
+    # the first version did, and it sent the dense route to a scale that exceeded its
+    # own transfer ceiling on MICrONS - so the default is the thing worth testing.
+    scale = _voxels.default_scale(ds)
+
+    # One fetch, three renderings of it: re-fetching per output form is four dense
+    # reads on the CAVE route, which is minutes of wall clock for no extra coverage.
+    try:
+        runs, resolution, _ = _voxels.fetch(ds, int(body), scale)
+    except co.ConnectoError as e:
+        # The aedes service caps segments at 256 chunks and serves one scale only,
+        # so its largest neurons genuinely cannot be fetched. That connecto says so
+        # clearly *is* the correct behaviour - skip loudly rather than pretend.
+        if "too large for it" in str(e):
+            pytest.skip(f"{ds.label}: {e}")
+        raise
+    n_voxels = _voxels.rle.run_voxel_count(runs)
+    assert runs.shape[1] == 4
+    assert n_voxels > 0, f"{ds.label} returned an empty sparse volume"
+
+    vn = ds.voxels.get(body, scale=scale, progress=False)
+    assert isinstance(vn, navis.NeuronList) and len(vn) == 1
+    n = vn[0]
+    assert isinstance(n, navis.VoxelNeuron)
+    assert "nanometer" in str(n.units)
+    assert len(n.voxels) == n_voxels
+
+    if not ds.supports(Cap.SKELETONS):
+        return
+
+    # Independent check: the voxels belong to *this* neuron, in *this* place.
+    #
+    # Checked against the skeleton, not the mesh. neuPrint-backed meshes come back in
+    # voxel units while labelled nanometres (hemibrain/maleCNS/MANC are 8x small,
+    # FlyWire's mirror 4/4/40x) - a real, separate bug - so the mesh is not a sound
+    # reference frame. Skeletons are correct in nm on both backends.
+    sk = ds.skeletons.get(body, progress=False)[0]
+    nodes = sk.nodes[["x", "y", "z"]].values
+    nm = _voxels.to_nm(_voxels.rle.decode_runs(runs), resolution)
+
+    # The two bounding boxes must essentially coincide.
+    #
+    # Not strict enclosure: at these scales a neuron's thinnest neurites downsample
+    # away entirely, so the skeleton legitimately reaches a little past the voxels -
+    # measured at 0.3-1.5% of extent on FlyWire. The tolerance is therefore relative,
+    # which still leaves it enormously tighter than either failure it guards against.
+    # A wrong node puts the neuron somewhere else entirely, and a bad grid conversion
+    # is off by a whole voxel-size factor (the neuPrint mesh bug is 8x = 700%).
+    extent = nodes.max(0) - nodes.min(0)
+    tol = np.maximum(0.05 * extent, 4 * np.asarray(resolution))
+    off = np.maximum(np.abs(nm.min(0) - nodes.min(0)), np.abs(nm.max(0) - nodes.max(0)))
+    assert (off <= tol).all(), (
+        f"{ds.label}: the sparse volume and the neuron's own skeleton do not agree.\n"
+        f"  voxels    {nm.min(0)} .. {nm.max(0)}\n"
+        f"  skeleton  {nodes.min(0)} .. {nodes.max(0)}\n"
+        f"  worst corner offset {off} vs tolerance {tol} "
+        f"({np.round(100 * off / extent, 1)}% of extent)\n"
+        f"Wrong node, or a bad voxel-grid conversion."
+    )
+
+
 # --------------------------------------------------------------- the capabilities
 
 def test_capabilities_are_honest(ds):
@@ -134,6 +212,7 @@ def test_capabilities_are_honest(ds):
         ("segmentation", Cap.SEGMENTATION),
         ("proofreading", Cap.PROOFREADING),
         ("l2", Cap.L2CACHE),
+        ("voxels", Cap.VOXELS),
     ):
         if ds.supports(cap):
             assert hasattr(ds, ns)

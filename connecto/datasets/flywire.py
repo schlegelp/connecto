@@ -79,6 +79,10 @@ _CAPS = {
     Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SYNAPSE_SCORES,
     Cap.NT_PER_SYNAPSE, Cap.ROI_CONN, Cap.SKELETONS, Cap.MESHES,
     Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.PROOFREADING, Cap.SOMAS, Cap.NEUROGLANCER,
+    # Sparse volumes via the dense-read path - a chunkedgraph keeps no per-body
+    # index, so this is expensive and `voxels.get` says so. Verified at scales 4
+    # and 6: every voxel lands inside the neuron's own mesh bounding box.
+    Cap.VOXELS,
     # Note: no Cap.L2CACHE. The `flywire_fafb_public` datastack genuinely has no
     # L2 cache (only production does) - the server says so, and declaring it here
     # would mean the skeleton fallback fails with an HTTP 500 instead of a clear
@@ -123,6 +127,13 @@ FLYWIRE = DatasetSpec(
             # every synapse position comes back 4-40x too big - silently, because the
             # edges are still right.
             position_units="nm",
+            # FlyWire's voxels are real, but they are CAVE's. This mirror is a
+            # neuPrint *import*, not a DVID deployment, so there is no sparsevol
+            # endpoint behind it - unlike every Janelia dataset, where the neuPrint
+            # door does front a DVID server. Denying it here is what makes the error
+            # name the CAVE door instead of failing later with "cannot locate a DVID
+            # server for 'flywire-fafb:v783b'".
+            missing_capabilities={Cap.VOXELS},
         ),
         BackendSpec(
             "cave",

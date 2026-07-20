@@ -18,8 +18,8 @@ The handle: versions, capabilities, `ids()`, `at()`. Plus the dataset constructo
 
 ### [Namespaces](namespaces.md)
 
-`ds.annotations`, `ds.connectivity`, `ds.skeletons`, `ds.meshes`, `ds.rois`,
-`ds.somas`, `ds.viz`, `ds.segmentation`, `ds.proofreading`.
+`ds.annotations`, `ds.connectivity`, `ds.skeletons`, `ds.meshes`, `ds.voxels`,
+`ds.rois`, `ds.somas`, `ds.viz`, `ds.segmentation`, `ds.proofreading`.
 
 </div>
 
@@ -71,6 +71,7 @@ ds.connectivity.edges(x)      ds.connectivity.adjacency(x)  ds.connectivity.syna
 ds.connectivity.synapse_counts(x)                           ds.connectivity.transmitters(x)
 ds.skeletons.get(x)           ds.skeletons.dotprops(x)
 ds.meshes.get(x)
+ds.voxels.get(x)              ds.voxels.estimate(x)         ds.voxels.scales()
 ds.rois.list()                ds.rois.hierarchy()           ds.rois.mesh(roi)
 ds.somas.get(x)
 ds.viz.scene(x)               ds.viz.neuroglancer_url(x, color_by="type")

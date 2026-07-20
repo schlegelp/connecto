@@ -23,6 +23,24 @@ a `version=` override.
 
 ::: connecto.core.namespaces.Meshes
 
+## Voxels
+
+Sparse volumes: every voxel belonging to a neuron, as an `(N, 3)` array.
+
+The one namespace whose cost varies by three orders of magnitude between datasets, so
+it is also the one that talks about cost. hemibrain, maleCNS, MANC and fish2 are backed
+by DVID, which keeps a live per-body index and answers in a single request; aedes has a
+lookup service that does the same. FlyWire, BANC, FANC and MICrONS have a chunkedgraph,
+which keeps **no** such index — so the same question means reading dense blocks and
+masking them, touching thousands of voxels for every one it keeps. `estimate()` tells
+you which you are in for before you commit.
+
+`scale=` never defaults to 0. A hemibrain neuron at scale 0 is 1.17 billion voxels; on
+the CAVE route the equivalent request is refused outright rather than left to look like
+a hang.
+
+::: connecto.core.namespaces.Voxels
+
 ## ROIs
 
 ::: connecto.core.namespaces.ROIs

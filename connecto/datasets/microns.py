@@ -87,6 +87,7 @@ MICRONS_SPEC = DatasetSpec(
             Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES,
             Cap.SKELETONS, Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH,
             Cap.SOMAS, Cap.NEUROGLANCER,
+            Cap.VOXELS,
             # No SYNAPSE_SCORES, no NT_PER_SYNAPSE, no ROI_CONN, no side.
             # Asking for min_score= or transmitters= here raises, loudly.
         }

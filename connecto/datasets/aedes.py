@@ -18,7 +18,13 @@ frame.
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec
+from ..core.spec import (
+    AnnotationSource,
+    BackendSpec,
+    Cap,
+    DatasetSpec,
+    SparseVolSource,
+)
 
 # aedes_main records side as L / R / M (with ~530 blanks, which are not a side).
 _SIDES = {"L": "left", "R": "right", "M": "center"}
@@ -102,13 +108,39 @@ AEDES_SPEC = DatasetSpec(
     },
     side_map=_SIDES,
     voxel_size=(16, 16, 45),
+    # A lookup service that keeps the per-body index the chunkedgraph does not, so
+    # aedes gets sparse volumes in one request instead of the several-hundred-block
+    # dense read every other CAVE dataset needs (see `connecto.voxels.pcg`).
+    #
+    # `scales=(1,)` is the literal truth and not a placeholder: scale 0 is refused
+    # ("would require reading 6,039,797,760 voxels"), and scales 2 and 3 answer a
+    # bare `500 Internal Server Error`. Declaring it means asking for scale 2 gets a
+    # sentence about which scales exist rather than the server's stack trace.
+    #
+    # `downsample=(2, 2, 1)` because this pyramid halves X and Y only - so scale 1 is
+    # 32x32x45 nm, not 32x32x90. Assuming isotropy would stretch every neuron 2x in Z
+    # and look entirely plausible while doing it.
+    #
+    # Known ceiling: the service refuses any segment spanning more than 256 chunks
+    # ("Use a coarser scale" - which, with one scale, cannot be done). The largest
+    # neurons here are therefore simply not available as sparse volumes; the first of
+    # `example_ids` below is one of them, at 370 chunks. Skeletons and meshes for
+    # those neurons are unaffected.
+    sparsevol_source=SparseVolSource(
+        url=(
+            "https://flyem.mrc-lmb.cam.ac.uk/transform-service/sparsevol"
+            "/dataset/wclee_aedes_brain/s/{scale}/root/{id}"
+        ),
+        scales=(1,),
+        downsample=(2, 2, 1),
+    ),
     capabilities=frozenset(
         {
             # Annotations come from FlyTable, not from the (annotation-less) datastack.
             # No Cap.SYNAPSE_SCORES - the synapse table has `size`, not a score.
             Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.SKELETONS,
             Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH, Cap.SOMAS,
-            Cap.NEUROGLANCER, Cap.LIVE,
+            Cap.NEUROGLANCER, Cap.LIVE, Cap.VOXELS,
         }
     ),
     # Two heavily-connected neurons, unchanged across every live materialization.

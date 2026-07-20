@@ -39,6 +39,19 @@ _NEUPRINT_CAPS = frozenset(
 # whose IDs belong to a different release.
 _NEUPRINT_SEG_CAPS = _NEUPRINT_CAPS | {Cap.SEGMENTATION}
 
+# Every dataset in this module is DVID-backed, and DVID maintains a live per-body
+# index - body to blocks to runs - so one neuron's voxels are a single request
+# rather than the dense read a chunkedgraph forces (see `connecto.voxels.pcg`).
+#
+# VOXELS is separate from SEGMENTATION for the same reason SEGMENTATION is separate
+# from CHUNKEDGRAPH: "there is a volume" and "you can extract one body from it
+# cheaply" are different claims. fish2 has the second without the first - no public
+# precomputed volume, but its DVID answers `sparsevol` perfectly well.
+#
+# Claimed only where a real body was actually fetched and its extent sanity-checked,
+# on all four: hemibrain 1734350788, maleCNS 10001, MANC 13438, fish2 100000001.
+_DVID_CAPS = _NEUPRINT_SEG_CAPS | {Cap.VOXELS}
+
 # Janelia's side vocabularies. hemibrain/maleCNS use L/R/M; MANC uses LHS/RHS.
 _LRM = {"L": "left", "R": "right", "M": "center", "C": "center"}
 _LHS = {"LHS": "left", "RHS": "right", "M": "center", "UNK": None}
@@ -96,7 +109,7 @@ HEMIBRAIN = DatasetSpec(
     segmentation_source="precomputed://gs://neuroglancer-janelia-flyem-hemibrain/v1.2/segmentation",
     # No `class` and no predicted transmitters in v1.2.1 - so they are simply
     # absent from the frame rather than present-and-empty.
-    capabilities=_NEUPRINT_SEG_CAPS,
+    capabilities=_DVID_CAPS,
     example_ids=(1734350788, 1734350908),  # two DA1 lPNs
 )
 
@@ -150,7 +163,7 @@ MALECNS = DatasetSpec(
     voxel_size=(8, 8, 8),
     template_space="JRCFIB2022Mraw",
     segmentation_source="precomputed://gs://flyem-male-cns/v1.0/segmentation",
-    capabilities=_NEUPRINT_SEG_CAPS,
+    capabilities=_DVID_CAPS,
     example_ids=(10001, 10002),
 )
 
@@ -216,7 +229,7 @@ MANC_SPEC = DatasetSpec(
     # mismatch - v1.2.3 is a database revision on the same segmentation - and the
     # T-bar check confirms it: MDN's synapses land in MDN.
     segmentation_source="precomputed://gs://manc-seg-v1p2/manc-seg-v1.2",
-    capabilities=_NEUPRINT_SEG_CAPS,
+    capabilities=_DVID_CAPS,
     example_ids=(13438, 13809),  # two MDNs (moonwalker descending neurons)
 )
 
@@ -258,7 +271,7 @@ FISH2 = DatasetSpec(
     # login, no paper cites it, and none of the plausible buckets exist. So connecto
     # says it has no segmentation - which is the honest answer, and a better one than
     # a guessed URL that 404s at the first lookup.
-    capabilities=_NEUPRINT_CAPS,
+    capabilities=_NEUPRINT_CAPS | {Cap.VOXELS},
     example_ids=(100000001, 100000123),
 )
 

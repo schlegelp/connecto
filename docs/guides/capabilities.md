@@ -118,6 +118,28 @@ fw.supports(Cap.SEGMENTATION), fw.supports(Cap.CHUNKEDGRAPH)   # (True, True)
 hb.supports(Cap.SEGMENTATION), hb.supports(Cap.CHUNKEDGRAPH)   # (True, False)
 ```
 
+### And a third: `VOXELS`
+
+The same split happens once more. "There is a segmentation volume" and "you can get one
+neuron's voxels out of it" are different claims, because the second needs an **index**
+— something mapping a body to the blocks it occupies.
+
+DVID maintains one, so hemibrain, maleCNS, MANC and fish2 answer in a single request.
+A chunkedgraph maintains none: nothing relates a root ID to its blocks, so FlyWire has
+to read dense blocks and mask them, moving thousands of voxels for every one it keeps.
+Both *can* answer. The costs differ by three orders of magnitude, and `ds.voxels`
+says so rather than letting a reasonable-looking call run for ten minutes:
+
+```python
+hb.voxels.get(1734350788, scale=4)         # one request, ~2s
+fw.voxels.get(720575940604407468, scale=0) # ValueError: would transfer 8,287,944,704 voxels
+fw.voxels.estimate(720575940604407468)     # ask first
+```
+
+fish2 has `VOXELS` **without** `SEGMENTATION` — it publishes no precomputed volume, but
+its DVID answers `sparsevol` perfectly well — which is the clearest evidence the two are
+genuinely separate promises.
+
 ## A capability belongs to a *door*, not to a dataset
 
 FlyWire has a chunkedgraph. You cannot reach it through neuPrint.
@@ -240,8 +262,9 @@ a different and much more misleading statement than *"we do not have this field"
 | `ROIS` | an ROI hierarchy and meshes |
 | `SKELETONS` / `MESHES` | morphology |
 | `L2CACHE` | CAVE's level-2 chunk cache — carries the `ds.l2` namespace |
-| `SEGMENTATION` | a segmentation volume you can query — "what body is at this point", cutouts, voxels |
+| `SEGMENTATION` | a segmentation volume you can query — "what body is at this point", cutouts |
 | `CHUNKEDGRAPH` | that volume is a *proofreadable graph* — supervoxels, root-ID history, `update_ids` |
+| `VOXELS` | one neuron's voxels can be extracted from it — carries the `ds.voxels` namespace |
 | `PROOFREADING` | edit history, proofreading status |
 | `SOMAS` | soma / nucleus positions |
 | `LIVE` | non-materialized "right now" queries |

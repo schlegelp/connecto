@@ -27,7 +27,7 @@ hb.connectivity.edges("DA1_lPN")     # the same frame — different backend, dif
 
 **1. The same query returns the same shape.** Edges are always `pre, post, weight`
 as `int64, int64, int32`. Positions are always nanometres. Side is always
-`left`/`right`/`center`. Skeletons and meshes are always `navis` neurons.
+`left`/`right`/`center`. Skeletons, meshes and voxels are always `navis` neurons.
 
 This is checkable rather than aspirational: BANC is served by *both* backends at
 the same snapshot (CAVE materialization 888 ≡ neuPrint `banc:v888`, and its
@@ -78,6 +78,22 @@ underneath it, so only FlyWire's IDs can go stale:
 hb.segmentation.locs_to_segments(tbars)   # fine — what body is at this point?
 hb.segmentation.update_ids([1734350788])  # CapabilityError: no chunkedgraph
 ```
+
+The same principle covers *cost*, not just presence. `ds.voxels` gives you a neuron's
+sparse volume everywhere, but hemibrain is backed by DVID, which keeps a per-body index
+and answers in one request, while FlyWire's chunkedgraph keeps none and has to read
+dense blocks and mask them. Both work; one is three orders of magnitude dearer, so
+connecto says so instead of appearing to hang:
+
+```python
+hb.voxels.get(1734350788, scale=4)          # one request, ~2s → navis.VoxelNeuron
+fw.voxels.estimate(root)                    # ask before you commit
+fw.voxels.get(root, scale=0)                # ValueError: would transfer 8,287,944,704 voxels
+```
+
+None of the DVID servers or nodes are hard-coded — they are parsed at runtime out of
+neuPrint and clio metadata, and the node always matches the snapshot the rest of your
+query came from.
 
 ## Selecting neurons
 

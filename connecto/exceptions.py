@@ -9,6 +9,7 @@ __all__ = [
     "ConnectoServerError",
     "NoSuchVersionError",
     "NoSuchDatasetError",
+    "NoSuchBodyError",
     "AmbiguousVersionError",
     "MissingDependencyError",
 ]
@@ -90,6 +91,17 @@ class CapabilityError(ConnectoError, NotImplementedError, AttributeError):
 
 class NoSuchDatasetError(ConnectoError, KeyError):
     """No dataset with that name is registered."""
+
+    def __str__(self):  # KeyError otherwise repr()s the message
+        return self.args[0] if self.args else ""
+
+
+class NoSuchBodyError(ConnectoError, KeyError):
+    """The requested neuron does not exist in the volume being read.
+
+    Also a ``KeyError``, because that is what "this ID is not in there" already means
+    in Python, so `except KeyError` around a per-neuron loop keeps working.
+    """
 
     def __str__(self):  # KeyError otherwise repr()s the message
         return self.args[0] if self.args else ""

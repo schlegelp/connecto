@@ -130,6 +130,118 @@ detail when you do not need every vertex:
 fw.meshes.get(ids, lod=2)
 ```
 
+## Voxels
+
+A skeleton is a neuron's centreline and a mesh is its surface. `ds.voxels` gives you the
+thing itself — every voxel the segmentation assigns to that neuron.
+
+```python
+hb.voxels.get(1734350788, scale=4)
+```
+
+```
+<class 'navis.core.neuronlist.NeuronList'> containing 1 neurons (3.6MiB)
+                type        name          id            units               shape  dtype
+0  navis.VoxelNeuron  1734350788  1734350788  128.0 nanometer  (1379, 2329, 1789)  int32
+```
+
+You get `navis.VoxelNeuron`s, so they plot and measure like any other navis neuron. The
+coordinates stay in the (compact, integral) voxel grid and the neuron carries its
+nm-per-voxel in `units`, which is why a 310,000-voxel neuron is 3.6 MB rather than
+inflated into floats.
+
+Two other output forms:
+
+```python
+hb.voxels.get(x, output="raw")   # {id: (N, 3) int32 array}
+hb.voxels.get(x, output="rle")   # {id: (M, 4) runs — x, y, z, length}
+```
+
+`rle` is what the wire already carries, and it is much smaller — for this neuron, 53,779
+runs (0.9 MB) instead of 310,252 voxels (3.7 MB). If you are storing volumes or moving
+them around, store the runs.
+
+!!! warning "`scale=` does not default to 0"
+
+    Scale 0 is full resolution, and full resolution is enormous: this same hemibrain
+    neuron is **1.17 billion voxels** at scale 0 — 14 GB as an `(N, 3)` int32 array.
+    The default is a scale that returns a recognisable neuron in a couple of seconds.
+    Ask for `scale=0` deliberately, or not at all.
+
+    `ds.voxels.scales()` lists what a dataset serves — `(0, 1, ..., 7)` for hemibrain,
+    but exactly `(1,)` for aedes, whose service publishes only that one. Note that a
+    scale being *available* says nothing about it being *affordable*: every CAVE
+    dataset lists scale 0, and none of them can deliver a whole neuron at it.
+
+!!! note "aedes has a size ceiling"
+
+    The aedes service refuses any neuron spanning more than 256 chunks, and it serves
+    only one scale — so there is no coarser level to retreat to. The largest neurons
+    in that dataset simply have no sparse volume. connecto says so rather than
+    relaying the server's (impossible) suggestion to try a coarser scale. Their
+    skeletons and meshes are unaffected.
+
+### Where they come from, and why the cost differs so much
+
+This is the part worth knowing, because the same call costs a second on one dataset and
+several minutes on another.
+
+| dataset | route | cost |
+|---|---|---|
+| hemibrain, maleCNS, MANC, fish2 | DVID `sparsevol` | one indexed request |
+| aedes | a lookup service | one indexed request |
+| FlyWire, BANC, FANC, MICrONS | dense read + mask | hundreds of block reads |
+
+DVID keeps a live per-body index — body to blocks to runs — so extracting one neuron is
+a single lookup. A chunkedgraph keeps **no such index**: it stores the graph, and the
+voxels underneath are a static volume with nothing mapping a root ID to the blocks it
+occupies. So the same question degrades to *read dense blocks, mask to one root,
+sparsify*, and touches thousands of voxels for every one it keeps.
+
+connecto does not hide that. Ask before you commit:
+
+```python
+fw.voxels.estimate(720575940604407468, scale=4)
+```
+
+```
+           root_id  scale  l2_nodes  chunks  requests  voxels_transferred           resolution    block_shape
+720575940604407468      4       705     247       288           603979776 (256.0, 256.0, 40.0) [256, 256, 32]
+```
+
+604 million voxels transferred to keep about 259,000. And a request that would be
+genuinely unreasonable is refused rather than left running:
+
+```python
+fw.voxels.get(720575940604407468, scale=0)
+# ValueError: Reading root 720575940604407468 at scale 0 would transfer
+# 8,287,944,704 voxels (3952 block reads for 247 chunks), over the
+# 2,000,000,000 ceiling.
+# A chunkedgraph has no per-body index, so this is a dense read - see
+# `voxels.estimate()`. Use a coarser `scale=`, pass `max_chunks=` to sample,
+# or raise `max_voxels=`.
+```
+
+!!! note "Coarser is not automatically cheaper"
+
+    A counter-intuitive one, and it is why the CAVE path plans its requests the way it
+    does. Storage blocks are the *same shape at every scale* (256×256×32 for FlyWire),
+    and fly pyramids downsample XY only. So asking for a coarser scale does not, by
+    itself, move fewer bytes — it just discards more of each block. What makes coarse
+    reads cheap is fetching each distinct block once instead of once per graph chunk,
+    which is what connecto does.
+
+### Nothing is hard-coded
+
+For the DVID datasets, the server and node are **discovered at runtime** — hemibrain's
+from neuPrint's own metadata, maleCNS's and MANC's from clio, fish2's from its
+neuroglancer layers. None of those URLs appear in connecto's source, and the node is
+always taken from neuPrint's `Meta.uuid`, so the voxels you get are from the same
+snapshot as the annotations and connectivity you got alongside them.
+
+maleCNS and MANC therefore need clio (`pip install connecto[clio]`) and a clio token for
+this one namespace, even though their annotations and connectivity do not.
+
 ## Where skeletons actually come from
 
 This is worth knowing, because it is the part most likely to surprise you.

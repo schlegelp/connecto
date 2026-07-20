@@ -22,6 +22,7 @@ __all__ = [
     "Cap",
     "BackendSpec",
     "AnnotationSource",
+    "SparseVolSource",
     "DatasetSpec",
     "Publication",
     "BACKEND_LIMITS",
@@ -77,6 +78,23 @@ class Cap(str, Enum):
     # two capabilities.
     SEGMENTATION = "segmentation"  # a queryable segmentation volume
     CHUNKEDGRAPH = "chunkedgraph"  # supervoxels, root-ID history, update_ids (CAVE)
+
+    # A third thing, for the same reason the two above are separate: "there is a
+    # segmentation volume" and "you can get one neuron's voxels out of it without
+    # reading the whole brain" are different claims.
+    #
+    # DVID maintains a live per-body index (body -> blocks -> runs), so a sparse
+    # volume is one cheap request. A chunkedgraph maintains no such index: the
+    # voxels are a static precomputed volume with nothing mapping a root ID to the
+    # blocks it occupies, so the same question degrades to "read dense blocks, mask,
+    # sparsify" - 100-1000x more voxels touched than kept. Both can answer; the cost
+    # differs by three orders of magnitude, and `voxels.get` says so up front rather
+    # than appearing to hang.
+    #
+    # Kept apart from SEGMENTATION because Aedes has this *without* connecto being
+    # able to read its graphene volume directly - it is served by a lookup service -
+    # and hemibrain has both by two unrelated routes.
+    VOXELS = "voxels"  # per-neuron sparse volumes (N, 3)
 
     PROOFREADING = "proofreading"  # edit history, proofreading status (CAVE)
     SOMAS = "somas"
@@ -278,6 +296,43 @@ class AnnotationSource:
 
 
 @dataclass(frozen=True)
+class SparseVolSource:
+    """A service that hands out one neuron's voxels, run-length encoded.
+
+    The escape hatch for datasets whose voxels connecto cannot reach cheaply on its
+    own. A chunkedgraph has no per-body spatial index, so the generic CAVE path has
+    to read dense blocks and mask them; where somebody has stood up a service that
+    *does* keep an index, this points at it and the expensive path is skipped.
+
+    ``url`` is a template taking ``{id}`` and ``{scale}``. The response is expected
+    to be the same wire format DVID's ``sparsevol`` emits - little-endian int32
+    ``(x, y, z, run_length)`` runs along +X - which is what makes one decoder serve
+    every source connecto has (see :mod:`connecto.voxels.rle`).
+    """
+
+    url: str
+
+    # Which scales the service actually serves. Not decoration: the aedes service
+    # answers 400 for scale 0 ("would require reading 6,039,797,760 voxels") and a
+    # bare 500 for scales 2 and 3. Declaring the truth means `voxels.get(x, scale=2)`
+    # says which scales exist instead of relaying an Internal Server Error.
+    scales: tuple[int, ...] = (0,)
+
+    # Per-scale downsample factor, per axis. Not always (2, 2, 2): fly pyramids
+    # routinely halve X and Y while leaving Z alone, so aedes is (2, 2, 1) and its
+    # 16x16x45 nm voxels become 32x32x45 at scale 1 - not 32x32x90. Getting this
+    # wrong scales a neuron wrongly along one axis, which looks plausible and is not.
+    downsample: tuple[int, int, int] = (2, 2, 2)
+
+    def resolution(self, scale: int, voxel_size) -> tuple[float, float, float]:
+        """nm per voxel at ``scale``, given the dataset's scale-0 ``voxel_size``."""
+        return tuple(
+            float(v) * float(d) ** int(scale)
+            for v, d in zip(voxel_size, self.downsample)
+        )
+
+
+@dataclass(frozen=True)
 class DatasetSpec:
     """Everything connecto knows about a dataset."""
 
@@ -339,6 +394,16 @@ class DatasetSpec:
     # Preferred over both backends' own skeleton services: CAVE's needs an L2 cache
     # that `flywire_fafb_public` does not have, and neuPrint's is not always there.
     skeleton_source: str | None = None
+
+    # A service that serves per-neuron sparse volumes, if one exists for this
+    # dataset. When set, `voxels.get` asks it instead of reading dense blocks - the
+    # difference between one request and several hundred. See `SparseVolSource`.
+    #
+    # DVID datasets need nothing here: their server and node are discovered at
+    # runtime from neuPrint or clio metadata rather than written down (see
+    # `connecto.voxels.dvid`), because those servers are not public knowledge and a
+    # URL pinned in source would be both a leak and wrong by the next release.
+    sparsevol_source: SparseVolSource | None = None
 
     # Which neuroglancer to send people to, and which *state dialect* it speaks.
     #

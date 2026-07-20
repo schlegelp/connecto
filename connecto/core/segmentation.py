@@ -88,7 +88,18 @@ class Segmentation(_Namespace):
 
     @requires(Cap.SEGMENTATION)
     def get_voxels(self, x, *, mip: int = 0) -> np.ndarray:
-        """Every voxel belonging to one segment. Expensive; use sparingly."""
+        """Every voxel belonging to one segment, as raw ``(N, 3)`` voxel indices.
+
+        Prefer :meth:`connecto.core.namespaces.Voxels.get` (``ds.voxels.get``) unless
+        you specifically want this. That one takes any neuron query rather than a
+        single ID, returns ``navis.VoxelNeuron``s that carry their own nm-per-voxel,
+        can hand back the compact run-length form, and - where the dataset has an
+        index behind it - is a single request instead of a dense read.
+
+        This stays because it is a different, simpler thing: one segment, one
+        mesh-bounded cutout, no chunkedgraph needed. It is also the only route for a
+        segment that is not a neuron the graph knows about.
+        """
         from . import volume
 
         return volume.get_voxels(self._ds, int(x), mip=mip)

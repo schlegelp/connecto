@@ -69,6 +69,13 @@ BANC_SPEC = DatasetSpec(
                 Cap.MESHES,         # no volume to read them from
                 Cap.SEGMENTATION,   # ditto: BANC's only volume is CAVE's graphene
                 Cap.NEUROGLANCER,   # a scene needs a segmentation source
+                # BANC's voxels are real, but they are CAVE's. This mirror is a
+                # neuPrint *import*, not a DVID deployment, so there is no sparsevol
+                # endpoint behind it - unlike every Janelia dataset, where the
+                # neuPrint door does front a DVID server. Denying it here is what
+                # makes the error name the CAVE door instead of failing later with
+                # "cannot locate a DVID server".
+                Cap.VOXELS,
             },
         ),
         BackendSpec(
@@ -115,6 +122,7 @@ BANC_SPEC = DatasetSpec(
             Cap.ANNOTATIONS, Cap.CONNECTIVITY, Cap.SYNAPSES, Cap.ROI_CONN,
             Cap.SKELETONS, Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH,
             Cap.SOMAS, Cap.NEUROGLANCER,
+            Cap.VOXELS,
         }
     ),
     # Central-brain neurons, valid in CAVE mat 888 *and* neuPrint banc:v888 - the
