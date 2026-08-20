@@ -460,11 +460,27 @@ def test_the_documented_capability_matrix_matches_the_code(path):
 @pytest.mark.parametrize("path", ["README.md", "docs/index.md"])
 def test_the_documented_neuron_level_nt_column_matches_the_specs(path):
     """`NT/neuron` is not a capability - it is whether the default annotation source
-    has an `nt` field - so nothing in `capability_matrix()` can hold it honest."""
+    has an `nt` field - so nothing in `capability_matrix()` can hold it honest.
+
+    Three marks, not two. A dataset where a classifier covers the volume and one where
+    a handful of neurons carry a transmitter somebody read off a paper are not the same
+    claim, and averaging over the second as though it were the first turns annotation
+    effort into a result. `aedes` is the only ◐ today: 40% coverage, all of it curated.
+
+    Dense is read off `Cap.NT_PER_SYNAPSE` rather than declared separately, because the
+    per-neuron call *is* the per-synapse model rolled up - a dataset has a dense one
+    exactly when somebody ran the classifier. Should a dataset ever import per-neuron
+    predictions without the synapses behind them, this is the assumption to revisit.
+    """
     for (name, backend), row in _doc_matrix(path).items():
         spec = REGISTRY[name]
         src = spec.annotation_source("auto")
         fields = dict(spec.fields) | dict(src.fields if src else {})
-        assert (row["NT/neuron"] == "✅") == bool(fields.get("nt")), (
-            f"{path}: {name}/{backend} shows NT/neuron={row['NT/neuron']!r}"
+        if not fields.get("nt"):
+            expected = "·"
+        else:
+            expected = "✅" if spec.backends_with(Cap.NT_PER_SYNAPSE) else "◐"
+        assert row["NT/neuron"] == expected, (
+            f"{path}: {name}/{backend} shows NT/neuron={row['NT/neuron']!r}, "
+            f"expected {expected!r}"
         )

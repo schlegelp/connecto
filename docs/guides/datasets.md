@@ -445,6 +445,14 @@ Jefferis, Marin and Younger). CAVE (`wclee_aedes_brain`).
 
 - **Not public.** The datastack is undocumented and appears to be restricted to project
   members. Ask the Lee lab or the whole-brain connectome project.
+- **Its transmitters are curated, not predicted** — the `◐` in the table above. 6,981 of
+  17,397 neurons carry a `neurotransmitter_verified`, each traceable to a paper
+  (`neurotransmitter_verified_source` keeps the citation: Yasuyama 1999 for the ORNs,
+  Barnstedt 2016 for the KCs, and so on), transferred by cell type. No classifier has
+  run on this volume, so there is no `top_nt` to fall back on and
+  `synapses(x, transmitters=True)` raises. A null `nt` here means *nobody has looked*,
+  not *no transmitter* — which is the opposite of what a null means on FlyWire, and the
+  reason the table marks the two differently.
 
 **Its annotations come from FlyTable, not CAVE.** The datastack ships a synapse table
 and a nucleus table and nothing else — no column that means "type" or "side". The

@@ -177,7 +177,7 @@ the whole navis ecosystem works without a conversion step.
 | `malecns` | fly | **neuprint** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · | ✅ | · |
 | `manc` | fly | **neuprint** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · | ✅ | · |
 | `microns` | mouse | **cave** | ✅ | ✅ | ✅ | · | · | · | · | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · |
-| `aedes` | mosquito | **cave** | ✅ | ✅ | ✅ | · | · | ✅ | · | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ |
+| `aedes` | mosquito | **cave** | ✅ | ✅ | ✅ | · | · | ◐ | · | · | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ |
 | `fish2` | zebrafish | **neuprint** | ✅ | ✅ | ✅ | ✅ | · | · | ✅ | ✅ | ✅ | ✅ | · | · | ✅ | · | ✅ | · |
 
 The capability columns come from `cn.capability_matrix()`, and a `·` there means the
@@ -185,12 +185,26 @@ call **raises** — not that it returns something subtly wrong.
 
 **NT/syn** and **NT/neuron** are different claims, and the difference matters. *NT/syn*
 is a capability: a prediction per synapse, so `synapses(x, transmitters=True)` and
-`connectivity.transmitters(x)` work, and raise where they can't. *NT/neuron* is one
-call per neuron and is **not** a capability — it arrives as the `nt` column of
-`annotations.get()`, and it depends on the annotation *source*, not the backend, so it
-has no cell in `capability_matrix()`. Ask `ds.annotations.fields["nt"]` for the columns
-behind it. `hemibrain` has neither; `aedes` has only the second (literature-verified,
-no model ever ran).
+`connectivity.transmitters(x)` work, and raise where they can't. *NT/neuron* is one call
+per neuron and is **not** a capability — it arrives as the `nt` column of
+`annotations.get()`, and it depends on the annotation *source* rather than the backend,
+so it has no cell in `capability_matrix()`. Ask `ds.annotations.fields["nt"]` for the
+columns behind it.
+
+`NT/neuron` has a third mark, because "this dataset has transmitters" hides a difference
+you cannot afford to miss when you aggregate:
+
+| | |
+|---|---|
+| ✅ | **dense** — a classifier was run over the volume, so essentially every neuron has a call, and most of them are model output |
+| ◐ | **sparse** — curated only: immunostaining, RT-PCR and the literature, transferred by cell type. Real evidence, but it covers a *fraction* of the dataset and a null means "nobody has looked", not "no transmitter" |
+| · | nothing at all |
+
+`aedes` is the ◐: 6,981 of its 17,397 neurons carry a transmitter, every one of them
+traceable to a paper, and no model has ever run on that volume. `hemibrain` is the `·`.
+Treating those two the same — or treating aedes's 40% like FlyWire's 99% — is how a
+"GABAergic fraction" ends up being a statement about annotation effort. `nt_source`
+names the exact column behind every value, so the distinction survives into the frame.
 
 `aedes`'s CAVE datastack ships no annotation table — so its cell typing comes from
 FlyTable (the lab's SeaTable) instead, keyed by root ID. It is lab-internal, so it
