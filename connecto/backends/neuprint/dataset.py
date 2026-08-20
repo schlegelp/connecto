@@ -255,16 +255,37 @@ class NeuPrintDataset(Dataset):
             )
 
     def _fetch_meshes(self, ids, version, *, lod=None, progress: bool = True, **opts):
-        import navis.interfaces.neuprint as neu
+        """Yield ``(body_id, trimesh.Trimesh)``.
 
-        neurons = neu.fetch_mesh_neuron(
-            np.asarray(ids, dtype="int64").tolist(),
-            lod=1 if lod is None else lod,
-            client=self.client,
-            progress=progress,
+        Read straight from the published precomputed bucket where the dataset
+        names one - every neuPrint dataset connecto ships does. That bucket is
+        plain HTTPS and needs no neuPrint login, and reading it here rather than
+        through navis keeps the mesh path on connecto's own reader.
+
+        ``lod=1`` by default, not 0. These are deep octrees and level 0 is the
+        full-resolution surface: one hemibrain neuron at level 0 is 36 million
+        vertices, which is not what somebody asking for "the mesh" wants.
+        """
+        from ...core.volume import fetch_meshes
+
+        source = self._segmentation_source()
+        if source is None:
+            # No published volume: fall back to whatever navis can find.
+            import navis.interfaces.neuprint as neu
+
+            neurons = neu.fetch_mesh_neuron(
+                np.asarray(ids, dtype="int64").tolist(),
+                lod=1 if lod is None else lod,
+                client=self.client,
+                progress=progress,
+            )
+            for n in navis_list(neurons):
+                yield int(n.id), n.trimesh
+            return
+
+        yield from fetch_meshes(
+            self, ids, source=source, lod=1 if lod is None else lod, progress=progress
         )
-        for n in navis_list(neurons):
-            yield int(n.id), n.trimesh
 
     # --------------------------------------------------------------------- somas
 

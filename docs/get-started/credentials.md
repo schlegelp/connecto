@@ -63,9 +63,9 @@ cn.auth_status(validate=False)   # instant, presence-only
        cn.set_token("cave", "<token>")
        ```
 
-    `set_token` writes to **both** connecto's config and cloud-volume's secret
-    file, so the two can never drift apart and disagree about which token is
-    current.
+    `set_token` writes to **both** connecto's config and the shared CAVE secret
+    file (`~/.cloudvolume/secrets/`, where caveclient looks), so the two can never
+    drift apart and disagree about which token is current.
 
     Public FlyWire and MICrONS need only a valid token. The *production* FlyWire
     stack additionally needs your account to be in the right group — see

@@ -21,7 +21,7 @@ __all__ = [
 # no edit history and no live query.
 #
 # There *is* a segmentation, though - a flat `precomputed://` volume, which
-# cloud-volume reads as happily as it reads a graphene one. What you cannot do is
+# connecto reads as happily as it reads a graphene one. What you cannot do is
 # ask it for supervoxels or `update_ids`; what you can do is ask it what body sits
 # at a point. Hence Cap.SEGMENTATION without Cap.CHUNKEDGRAPH - see `Cap` for why
 # those are two capabilities and not one.
@@ -33,7 +33,7 @@ _NEUPRINT_CAPS = frozenset(
 )
 
 # Only add SEGMENTATION where we have actually verified a public volume: opened it
-# with cloud-volume, and checked that a body's T-bars land back inside that body, so
+# against the volume, and checked that a body's T-bars land back inside that body, so
 # the volume's IDs really are the neuPrint body IDs. The alternative - assuming the
 # obvious bucket name - is how you end up promising a segmentation that 404s, or one
 # whose IDs belong to a different release.

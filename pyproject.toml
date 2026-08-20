@@ -22,24 +22,35 @@ dependencies = [
     "requests>=2.28",
     "trimesh>=4.0",
     "tqdm>=4.60",
-    # Required by the CAVE backend for meshes and for the skeleton service
-    # (caveclient reaches for it internally), so not really optional.
-    "cloud-volume>=8.0",
+    # Meshes are draco-encoded everywhere connecto reads them, and unlike
+    # compressed_segmentation there is no reasonable pure-Python fallback for
+    # draco. It is a self-contained wheel with no dependencies of its own.
+    "DracoPy>=1.4.0",
     "networkx>=3.0",
 ]
 
 [project.optional-dependencies]
 clio = ["clio-py"]
 flytable = ["sea-serpent"]
+# Both of these are compiled accelerators for the dense-read path, and connecto
+# works correctly without either.
+#
 # Masking a dense cutout down to one root means testing every voxel against a
 # ~27,000-element supervoxel manifest. fastremap does that far faster than
-# `np.isin`; `connecto.voxels.pcg` falls back to numpy without it, so this buys
-# speed on the CAVE sparse-volume path and nothing else.
-voxels = ["fastremap>=1.14"]
+# `np.isin`; `connecto.voxels.pcg` falls back to numpy without it.
+#
+# compressed-segmentation decodes a stored chunk about 25x quicker than the numpy
+# decoder in `connecto.precomputed.codecs` (0.3 ms versus 6 ms for a 64^3 chunk).
+# That is below the network noise for an ordinary cutout, which is why it is not a
+# default dependency, but it is worth having when reading whole neurons densely.
+voxels = ["fastremap>=1.14", "compressed-segmentation>=2.3"]
 # ruff >=0.15: older versions still enable the deprecated UP038 via the `UP` prefix,
 # which flags every isinstance(x, (int, np.integer)) in the codebase. Ruff deprecated
 # that rule because the `X | Y` form it suggests is slower and not recommended.
-dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.15"]
+# cloud-volume is a *test* dependency: `tests/test_precomputed.py` reads the same
+# boxes and meshes through both readers and asserts they agree, so it is the oracle
+# connecto's own precomputed reader is checked against. Nothing ships importing it.
+dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.15", "cloud-volume>=8.0"]
 # The API reference is generated from the docstrings, so mkdocstrings is not
 # optional for a *complete* build - without it the reference pages come out empty.
 docs = ["zensical>=0.0.50", "mkdocstrings[python]>=1.0.6"]

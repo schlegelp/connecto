@@ -108,11 +108,17 @@ SeaTable table with an object column that mixes `int` and `str`, say — fall ba
 pickle rather than silently not caching at all; either way a cache hit is exactly what
 a miss would have returned.
 
-## Meshes
+## Meshes and volumes
 
-Meshes are cached by `cloud-volume`, in its own directory, not by connecto. They are
-large — one FlyWire neuron is around 33 MB at full resolution — so if you are hunting for
-disk space, look there as well as at `cn.cache.size()`.
+Meshes and segmentation cutouts are **not** cached on disk at all — every call fetches
+them again. They are large (one FlyWire neuron is around 33 MB at full resolution) and
+the key space is unbounded, which is the same reason connectivity queries are not cached
+by default. Hold on to the neurons you fetched, or persist them yourself with
+`navis.write_swc`/`write_precomputed`.
+
+What *is* cached, in memory and for the life of the process, is the metadata: a volume's
+`info`, and the shard indices needed to find a chunk inside a shard. That is what stops a
+cutout spanning 500 chunks from re-reading the same index 500 times.
 
 ## The rule
 

@@ -65,7 +65,7 @@ def default_scale(ds) -> int:
     # Clamped to what the pyramid actually has. Pyramid depth is a property of the
     # volume, not of the route: FlyWire stops at 6, BANC at 7, MICrONS at 9, and FANC
     # at *5* - so a fixed preference of 6 asked FANC for a scale that does not exist
-    # and got `IndexError: list index out of range` out of cloud-volume's metadata.
+    # and got `IndexError: list index out of range` out of the volume's metadata.
     return min(_DEFAULT_SCALE[route(ds)], max(scales(ds)))
 
 

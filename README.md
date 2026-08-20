@@ -230,8 +230,8 @@ A 403 is reported as a *different* problem, because it has a different fix: your
 token is fine, you're just not in the right group — and a new token won't help.
 
 ```python
-co.set_token("cave", "<token>")   # writes to both connecto and cloud-volume,
-                                  # so the two can never disagree
+co.set_token("cave", "<token>")   # writes to connecto's config *and* the shared
+                                  # CAVE secret file, so the two can never disagree
 ```
 
 ## When CAVE is down

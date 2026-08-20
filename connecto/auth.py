@@ -171,10 +171,10 @@ def set_token(service: str, token: str, *, write_native: bool = True):
     """Store a token.
 
     With ``write_native=True`` (the default) the token is written to *both*
-    connecto's config and the service's native location, so that caveclient,
-    cloud-volume and connecto can never disagree about which token is current -
-    which is the failure mode fafbseg papers over by reading from cloud-volume and
-    writing via caveclient.
+    connecto's config and the service's native location, so that caveclient and
+    connecto can never disagree about which token is current - which is the failure
+    mode fafbseg papers over by reading the token from one place and writing it to
+    another.
     """
     service = service.lower()
 

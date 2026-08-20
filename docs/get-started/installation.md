@@ -31,8 +31,20 @@ These are hard dependencies, not extras:
 | [`caveclient`](https://github.com/CAVEconnectome/CAVEclient) | the CAVE backend — FlyWire, BANC, MICrONS |
 | [`neuprint-python`](https://connectome-neuprint.github.io/neuprint-python/) | the neuPrint backend — hemibrain, maleCNS, MANC, fish2 |
 | [`navis`](https://navis-org.github.io/navis/) | skeletons and meshes come back as navis neurons |
-| [`cloud-volume`](https://github.com/seung-lab/cloud-volume) | meshes, and CAVE's skeleton service reaches for it internally |
+| [`DracoPy`](https://github.com/seung-lab/DracoPy) | meshes are draco-encoded everywhere connecto reads them |
 | `pandas`, `numpy`, `pyarrow`, `networkx`, `trimesh`, `tqdm` | the usual |
+
+!!! note "connecto does not use cloud-volume"
+
+    Segmentation volumes and meshes are read by `connecto.precomputed`, connecto's
+    own reader for the neuroglancer precomputed and graphene formats. cloud-volume
+    also *writes*, to Google Cloud, S3 and half a dozen other backends, and pays for
+    that in dependencies — boto3, the Google Cloud SDK, gevent, protobuf and the
+    rest come to roughly 78 MB across some 37 packages, none of which reading needs.
+
+    connecto's reader is checked against cloud-volume rather than instead of it:
+    `tests/test_precomputed.py` reads the same cutouts and the same meshes both ways
+    and asserts they agree, so cloud-volume is a development dependency.
 
 !!! warning "caveclient must be ≥ 8.0"
 
@@ -47,6 +59,7 @@ These are hard dependencies, not extras:
 Some annotation sources are lab-internal or need an extra package:
 
 ```bash
+pip install "connecto[voxels]"    # compiled decoders for dense reads
 pip install "connecto[clio]"      # Clio annotations (maleCNS)
 pip install "connecto[flytable]"  # SeaTable / "flytable" annotations
 pip install "connecto[points]"    # parallel point -> segment lookups

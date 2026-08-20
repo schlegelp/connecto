@@ -448,7 +448,7 @@ class Dataset(ABC):
     # ------------------------------------------------------------------ volumes
 
     # Where the segmentation and the EM image actually live. Two callers need this
-    # - cloud-volume (meshes, point lookups, cutouts) and neuroglancer - and they
+    # - the volume reader (meshes, point lookups, cutouts) and neuroglancer - and they
     # used to work it out separately. They drifted, as duplicated lookups do: the
     # viz copy read `neuroglancerMeta[0]["dataInstance"]`, and entry 0 of that list
     # is the *grayscale* layer, so it would have handed neuroglancer the string

@@ -16,6 +16,7 @@ empty result.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 import numpy as np
@@ -23,7 +24,7 @@ import pandas as pd
 
 from ...core.spec import Cap
 from ...core.volume import precomputed_skeleton
-from ...exceptions import CapabilityError
+from ...exceptions import CapabilityError, ConnectoError
 
 logger = logging.getLogger("connecto")
 
@@ -95,8 +96,54 @@ def _service_available(ds) -> bool:
         return False
 
 
+@contextlib.contextmanager
+def _without_cloudvolume_root_check(ds):
+    """Let the skeleton service work without cloud-volume installed.
+
+    caveclient's ``skeleton.get_skeleton`` calls ``info.segmentation_cloudvolume()``
+    purely to check that the id it was handed is a root and not, say, a supervoxel -
+    and that call hard-raises ImportError when cloud-volume is absent. The check
+    itself is bit arithmetic on the label, which :func:`_check_is_root` above has
+    already done, so we hand caveclient a ``None`` volume, which it already handles
+    (``if cv and ...``).
+
+    Unconditionally, not only when the import fails: gating on whether some other
+    package happens to be importable would make connecto behave differently in two
+    environments for no reason anybody could see, and quietly route back through the
+    dependency this reader exists to replace.
+
+    Remove this once caveclient no longer reaches for cloud-volume to answer a
+    question about a 64-bit integer.
+    """
+    info = ds.client.info
+    original = info.segmentation_cloudvolume
+    info.segmentation_cloudvolume = lambda *a, **kw: None
+    try:
+        yield
+    finally:
+        info.segmentation_cloudvolume = original
+
+
+def _check_is_root(ds, root: int) -> None:
+    """Refuse a non-root id here, rather than let the service answer nonsense."""
+    from ...core.volume import get_volume
+
+    try:
+        meta = get_volume(ds, ds._graph_source()).meta
+    except ConnectoError:
+        return  # cannot ask right now; the request itself will fail loudly enough
+    layer = meta.decode_layer_id(int(root))
+    if layer != meta.n_layers:
+        raise ValueError(
+            f"{root} is a layer-{layer} id, not a root id (roots are at layer "
+            f"{meta.n_layers}). Skeletons are built for whole neurons."
+        )
+
+
 def _service_skeleton(ds, root: int) -> pd.DataFrame:
-    sk = ds.client.skeleton.get_skeleton(root, output_format="dict")
+    _check_is_root(ds, root)
+    with _without_cloudvolume_root_check(ds):
+        sk = ds.client.skeleton.get_skeleton(root, output_format="dict")
     verts = np.asarray(sk["vertices"], dtype="float32")
     edges = np.asarray(sk["edges"], dtype="int64")
     radius = np.asarray(sk.get("radius", np.full(len(verts), -1)), dtype="float32")

@@ -20,9 +20,9 @@ bytes at scale 6 as at scale 0. What makes coarse reads cheap is planning reques
 onto *distinct storage blocks* - which took a whole-neuron scale-6 fetch from about
 ten minutes to ten seconds.
 
-*Masking beats agglomerating.* ``cv.agglomerate_cutout(label=root)`` re-fetches the
-supervoxel manifest for every chunk - hundreds of chunkedgraph round-trips for one
-neuron. The manifest is identical for all of them, so it is fetched once and
+*Masking beats agglomerating.* Asking the volume to agglomerate a cutout re-fetches
+the supervoxel manifest for every chunk - hundreds of chunkedgraph round-trips for
+one neuron. The manifest is identical for all of them, so it is fetched once and
 applied locally.
 
 *Overlap is expected.* The chunk grid is anchored at the volume's voxel offset,
@@ -47,9 +47,6 @@ __all__ = ["FetchStats", "estimate", "fetch_sparsevol", "DEFAULT_MAX_VOXELS"]
 # the ceiling exists so that request fails with an explanation instead of looking
 # like a hang.
 DEFAULT_MAX_VOXELS = 2_000_000_000
-
-_VOLUMES: dict = {}
-
 
 @dataclass
 class FetchStats:
@@ -110,34 +107,21 @@ class FetchStats:
 
 
 def get_volume(ds):
-    """A CloudVolume onto the *chunkedgraph*, configured for sparse reads.
+    """The volume onto the *chunkedgraph*, as opposed to the display volume.
 
-    Deliberately not :func:`connecto.core.volume.get_cloudvolume`, for two reasons.
+    The distinction is the whole point: FlyWire's spec points ``_segmentation_source``
+    at the flat v783 bucket, which is right for meshes and neuroglancer and useless
+    here, because a flat volume has no supervoxels to mask by. So this asks for
+    ``_graph_source`` by name.
 
-    It must be the graphene volume (``_graph_source``), never the spec's display
-    volume: FlyWire's spec points at the flat v783 bucket, which is right for meshes
-    and neuroglancer and useless here, because a flat volume has no supervoxels to
-    mask by.
-
-    And it needs ``bounded=False``. CloudVolume checks a requested box against the
-    volume's *current* ``cv.mip``, not against the mip being requested, so a
-    correctly-clipped scale-4 box is rejected outright. Boxes are clipped against
-    per-scale bounds here instead.
+    Everything else - credentials, ``fill_missing``, the shared cache - is
+    :func:`connecto.core.volume.get_volume`'s business. Boxes are clipped against
+    per-scale bounds by the caller, so the volume is left unbounded, which is the
+    default.
     """
-    source = ds._graph_source()
-    if source not in _VOLUMES:
-        import cloudvolume as cv
+    from ..core.volume import get_volume as _get_volume
 
-        _VOLUMES[source] = cv.CloudVolume(
-            source,
-            use_https=True,
-            progress=False,
-            # A neuron's chunk set comes from the graph; a chunk with no stored
-            # segmentation is legitimately empty, not an error.
-            fill_missing=True,
-            bounded=False,
-        )
-    return _VOLUMES[source]
+    return _get_volume(ds, ds._graph_source())
 
 
 # ------------------------------------------------------------------- geometry
@@ -156,7 +140,7 @@ def chunk_bbox(meta, position, scale: int = 0, clip: bool = True):
     where the chunk grid is defined, and then converted - so an anisotropic pyramid
     is handled by the metadata rather than by assuming an isotropic ratio.
     """
-    from cloudvolume.lib import Bbox
+    from ..precomputed import Bbox
 
     position = np.asarray(position, dtype=np.int64)
     size = np.asarray(meta.graph_chunk_size, dtype=np.int64)
@@ -233,7 +217,7 @@ def merge_to_storage_blocks(meta, boxes, scale: int = 0):
     Never loses voxels - a block covers at least what the chunks did, and the
     supervoxel mask decides membership regardless of which box was read.
     """
-    from cloudvolume.lib import Bbox
+    from ..precomputed import Bbox
 
     if len(boxes) == 0:
         return []

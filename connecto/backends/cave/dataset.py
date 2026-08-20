@@ -295,9 +295,9 @@ class CAVEDataset(Dataset):
         yield from fetch_skeletons(self, ids, version, **opts)
 
     def _fetch_meshes(self, ids, version, *, lod=None, **opts):
-        from .meshes import fetch_meshes
+        from ...core.volume import fetch_meshes
 
-        yield from fetch_meshes(self, ids, version, lod=lod, **opts)
+        yield from fetch_meshes(self, ids, lod=lod, **opts)
 
     # --------------------------------------------------------------------- somas
 

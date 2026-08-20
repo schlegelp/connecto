@@ -66,7 +66,7 @@ class Cap(str, Enum):
     # SEGMENTATION: there is a segmentation *volume* you can query - "what body is
     # at this point", "give me the voxels of this body". Every CAVE dataset has one
     # (graphene), and so does every published neuPrint dataset (a flat precomputed
-    # volume, advertised in `Client.meta`). It just needs cloud-volume.
+    # volume, advertised in `Client.meta`). It just needs a readable volume.
     #
     # CHUNKEDGRAPH: the volume is a *proofreadable graph* - supervoxels underneath
     # root IDs, root IDs that change when someone makes an edit, and therefore

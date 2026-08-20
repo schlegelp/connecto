@@ -1,4 +1,4 @@
-"""Reading a segmentation volume, via CloudVolume.
+"""Reading a segmentation volume.
 
 Backend-agnostic on purpose. A segmentation volume is a segmentation volume: the
 difference between FlyWire's graphene source and hemibrain's flat ``precomputed://``
@@ -20,9 +20,13 @@ accept (it is idempotent on roots) and answer wrongly for any version but 783.
 Nanometres in, nanometres out
 -----------------------------
 Every coordinate connecto hands you is in nanometres, so ``units="nm"`` is the
-default here too. CloudVolume works in voxels at its own mip-0 resolution - which is
+default here too. A volume works in voxels at its own mip-0 resolution - which is
 not necessarily the dataset's ``voxel_size``: FlyWire's spec says 4x4x40, its volume
 is 16x16x40 - so the conversion always uses the volume's own scale, never the spec's.
+
+The reading itself is :mod:`connecto.precomputed`, connecto's own precomputed and
+graphene reader. It used to be cloud-volume, whose write path and multi-cloud
+storage layer cost some 78 MB of dependencies that reading never touches.
 """
 
 from __future__ import annotations
@@ -30,15 +34,17 @@ from __future__ import annotations
 import collections
 from concurrent.futures import ThreadPoolExecutor
 
-import cloudvolume as cv
 import numpy as np
+
+from ..precomputed import Bbox, Volume, is_graphene
 
 __all__ = [
     "GSPointLoader",
     "PRECOMPUTED_SKELETON_COLMAP",
     "PRECOMPUTED_SKELETON_INFO",
-    "get_cloudvolume",
+    "fetch_meshes",
     "get_voxels",
+    "get_volume",
     "lookup_points",
     "precomputed_skeleton",
     "segmentation_cutout",
@@ -88,16 +94,35 @@ def precomputed_skeleton(url: str, root: int):
     return tn.nodes
 
 
-def get_cloudvolume(ds, source: str | None = None):
-    """A CloudVolume onto ``source`` (default: this dataset's segmentation), cached."""
+def _volume_kwargs(ds, source: str) -> dict:
+    """Which credentials, if any, this source wants.
+
+    Only a graphene source gets the CAVE session, and it is the *service* that gets
+    it - the graph and meshing endpoints. Everything else is a public object store,
+    and sending a CAVE bearer token there is not merely unnecessary: Google Storage
+    tries to authenticate with it and answers 401 on an object anyone can read
+    anonymously. FlyWire is exactly this case, since a CAVE-backed FlyWire reads its
+    *flat* v783 bucket for meshes while its graph lives behind CAVE.
+    """
+    graph = getattr(getattr(ds, "client", None), "chunkedgraph", None)
+    if graph is None or not is_graphene(source):
+        return {}
+    return {
+        "session": getattr(graph, "session", None),
+        "get_roots": getattr(graph, "get_roots", None),
+    }
+
+
+def get_volume(ds, source: str | None = None):
+    """A volume onto ``source`` (default: this dataset's segmentation), cached."""
     if source is None:
         source = ds._segmentation_source()
     if source is None:
         raise ValueError(f"{ds.label} declares no segmentation source.")
 
     if source not in _VOLUMES:
-        _VOLUMES[source] = cv.CloudVolume(
-            source, use_https=True, progress=False, fill_missing=True
+        _VOLUMES[source] = Volume(
+            source, fill_missing=True, **_volume_kwargs(ds, source)
         )
     return _VOLUMES[source]
 
@@ -108,7 +133,7 @@ def _to_volume_nm(vol, locs, units: str) -> np.ndarray:
     if units == "nm":
         return locs
     if units == "voxel":
-        return locs * np.asarray(vol.scale["resolution"], dtype="float64")
+        return locs * np.asarray(vol.mip_resolution(0), dtype="float64")
     raise ValueError(f"`units` must be 'nm' or 'voxel', got {units!r}.")
 
 
@@ -120,8 +145,8 @@ class GSPointLoader:
     https://gist.github.com/chinasaur/5429ef3e0a60aa7a1c38801b0cbfe9bb
     """
 
-    def __init__(self, cloud_volume):
-        self._volume = cloud_volume
+    def __init__(self, volume):
+        self._volume = volume
         self._chunk_map = collections.defaultdict(set)
         self._points = None
 
@@ -134,8 +159,8 @@ class GSPointLoader:
         else:
             self._points = np.concatenate((self._points, points))
 
-        resolution = np.array(self._volume.scale["resolution"])
-        chunk_size = np.array(self._volume.scale["chunk_sizes"])
+        resolution = self._volume.mip_resolution(0)
+        chunk_size = self._volume.meta.chunk_size(0)
         chunk_starts = (points // resolution).astype(int) // chunk_size * chunk_size
         for point, chunk_start in zip(points, chunk_starts):
             self._chunk_map[tuple(chunk_start)].add(tuple(point))
@@ -151,7 +176,7 @@ class GSPointLoader:
         chunk_start = np.array(chunk_map_key)
         points = np.array(list(self._chunk_map[chunk_map_key]))
 
-        resolution = np.array(self._volume.scale["resolution"])
+        resolution = self._volume.mip_resolution(0)
         indices = (points // resolution).astype(int) - chunk_start
 
         # Subset the chunk to just the part containing our points - saves a lot of
@@ -170,33 +195,23 @@ class GSPointLoader:
         Threads, not processes. The work is one HTTPS GET per chunk - network-bound,
         with the GIL released for the whole of it - so a thread pool is both the right
         tool and the cheap one. The process pool this used to use had to pickle a
-        CloudVolume per task, and on macOS (spawn, not fork) it simply deadlocked:
-        every lookup hung forever at the default `max_workers=4`.
+        volume per task, and on macOS (spawn, not fork) it simply deadlocked: every
+        lookup hung forever at the default `max_workers=4`.
         """
         from tqdm.auto import tqdm
 
-        progress_state = self._volume.progress
-        self._volume.progress = False
-        try:
-            with tqdm(
-                total=len(self._chunk_map),
-                desc="Segmentation IDs",
-                leave=False,
-                disable=not progress,
-            ) as pbar:
-                results = []
-                workers = max(1, min(max_workers, len(self._chunk_map)))
-                if workers > 1:
-                    with ThreadPoolExecutor(max_workers=workers) as pool:
-                        for result in pool.map(self._load_points, list(self._chunk_map)):
-                            results.append(result)
-                            pbar.update(1)
-                else:
-                    for key in self._chunk_map:
-                        results.append(self._load_points(key))
-                        pbar.update(1)
-        finally:
-            self._volume.progress = progress_state
+        with tqdm(
+            total=len(self._chunk_map),
+            desc="Segmentation IDs",
+            leave=False,
+            disable=not progress,
+        ) as pbar:
+            results = []
+            workers = max(1, min(max_workers, len(self._chunk_map)))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for result in pool.map(self._load_points, list(self._chunk_map)):
+                    results.append(result)
+                    pbar.update(1)
 
         if return_sorted:
             lookup = dict(
@@ -228,7 +243,7 @@ def lookup_points(
     On a graphene source that is a supervoxel; on a flat one it is the segment ID
     itself. The caller knows which volume it asked for, so it knows which it got.
     """
-    vol = get_cloudvolume(ds, source)
+    vol = get_volume(ds, source)
     locs = _to_volume_nm(vol, locs, units)
     if not len(locs):
         return np.array([], dtype="int64")
@@ -241,10 +256,8 @@ def lookup_points(
 
 def segmentation_cutout(ds, bbox, *, mip: int = 0, units: str = "nm", source: str | None = None):
     """Raw segmentation in a bounding box, as a 3D array."""
-    from cloudvolume import Bbox
-
     source = source or ds._segmentation_source()
-    vol = get_cloudvolume(ds, source)
+    vol = get_volume(ds, source)
     bbox = np.asarray(bbox, dtype="float64").reshape(2, 3)
 
     if units == "nm":
@@ -253,25 +266,60 @@ def segmentation_cutout(ds, bbox, *, mip: int = 0, units: str = "nm", source: st
         raise ValueError(f"`units` must be 'nm' or 'voxel', got {units!r}.")
     bbox = bbox.astype("int64")
 
-    # `download` wants a Bbox. Handing it a list of two lists raises
-    # `AttributeError: 'list' object has no attribute 'start'` - it mistakes the
-    # list for a sequence of slices - which is neither obviously about the bbox nor
-    # obviously our fault, so it is worth not doing.
+    # `download` wants a Bbox, not a list of two lists.
     box = Bbox(bbox[0], bbox[1])
 
     # `agglomerate` is a graphene notion: roll supervoxels up into root IDs. A flat
-    # volume stores the segment IDs outright and has nothing to agglomerate.
-    opts = {"agglomerate": True} if str(source).startswith("graphene://") else {}
+    # volume stores the segment IDs outright and has nothing to agglomerate, and it
+    # knows that about itself - no need to re-read the protocol off its URL.
+    opts = {"agglomerate": True} if vol.agglomerable else {}
 
     return vol.download(box, mip=mip, **opts)
 
 
+def fetch_meshes(
+    ds,
+    ids,
+    *,
+    source: str | None = None,
+    lod=None,
+    progress: bool = True,
+    max_workers: int = 4,
+):
+    """Yield ``(id, trimesh.Trimesh)`` for each segment, in the order asked for.
+
+    Backend-agnostic, because reading a mesh no longer depends on which door you
+    came in by: a flat multi-resolution bucket and a chunkedgraph's meshing service
+    both answer :meth:`mesh.get` and both hand back a ``Trimesh``.
+
+    Threaded, because a mesh is a handful of sequential HTTPS GETs (shard index,
+    manifest, fragments) and fetching one neuron at a time leaves the link idle for
+    most of the wall clock.
+    """
+    from tqdm.auto import tqdm
+
+    vol = get_volume(ds, source)
+    ids = [int(i) for i in ids]
+    # Only pass `lod` when the caller meant one. Graphene meshes have no levels of
+    # detail - the graph layer sets the resolution - and the number would end up in
+    # the manifest URL, asking the service for something that does not exist.
+    kwargs = {} if lod is None else {"lod": int(lod)}
+
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(ids) or 1))) as pool:
+        meshes = pool.map(lambda i: vol.mesh.get(i, **kwargs), ids)
+        yield from tqdm(
+            zip(ids, meshes),
+            desc="Meshes",
+            total=len(ids),
+            disable=not progress or len(ids) < 2,
+            leave=False,
+        )
+
+
 def get_voxels(ds, seg_id: int, *, mip: int = 0, source: str | None = None) -> np.ndarray:
     """Every voxel belonging to one segment. Expensive; use sparingly."""
-    vol = get_cloudvolume(ds, source)
+    vol = get_volume(ds, source)
     mesh = vol.mesh.get(seg_id)
-    if isinstance(mesh, dict):
-        mesh = mesh[seg_id]
 
     # The mesh bounds tell us where to cut, so we download a box around the neuron
     # rather than the whole brain.

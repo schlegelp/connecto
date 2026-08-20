@@ -1,6 +1,6 @@
 """The segmentation namespace.
 
-Offline: a stub volume stands in for cloud-volume, because what is under test is the
+Offline: a stub volume stands in for the real reader, because what is under test is the
 *routing* - which volume gets read, which coordinates get sent, and which questions get
 refused - and none of that needs a live bucket.
 
@@ -31,18 +31,30 @@ GRAPHENE = "graphene://https://cave/segmentation/table/x"
 RES = [8, 8, 8]
 
 
+class _Meta:
+    """Just the geometry `volume.py` asks a volume's metadata for."""
+
+    def resolution(self, mip=0):
+        return np.array(RES)
+
+    def chunk_size(self, mip=0):
+        return np.array([64, 64, 64])
+
+
 class _Vol:
-    """The least CloudVolume that `volume.py` will accept."""
+    """The least volume that `volume.py` will accept."""
 
     def __init__(self, source):
         self.source = source
-        self.progress = False
-        self.scale = {"resolution": RES, "chunk_sizes": [[64, 64, 64]]}
+        self.meta = _Meta()
+        # A flat volume has nothing to roll up; a graphene one does. This is the
+        # property `segmentation_cutout` reads instead of re-parsing the URL.
+        self.agglomerable = str(source).startswith("graphene://")
         self.reads: list = []
         self.downloads: list = []
 
     def mip_resolution(self, mip):
-        return RES
+        return np.array(RES)
 
     def __getitem__(self, key):
         # GSPointLoader slices the volume; record the voxel window it asked for.
@@ -147,14 +159,14 @@ def _graph_ds():
 
 @pytest.fixture(autouse=True)
 def _stub_volumes(monkeypatch):
-    """Hand out a fake CloudVolume, and remember which source was asked for."""
+    """Hand out a fake volume, and remember which source was asked for."""
     made: dict = {}
 
     def fake(ds, source=None):
         source = source or ds._segmentation_source()
         return made.setdefault(source, _Vol(source))
 
-    monkeypatch.setattr(volume, "get_cloudvolume", fake)
+    monkeypatch.setattr(volume, "get_volume", fake)
     return made
 
 
@@ -261,7 +273,7 @@ def test_the_cutout_passes_a_bbox_not_a_list(_stub_volumes):
     """`download(bbox=[[...],[...]])` raises `AttributeError: 'list' object has no
     attribute 'start'` - it takes the list for a sequence of slices. Which is how this
     method came to have never worked, on any backend."""
-    from cloudvolume import Bbox
+    from connecto.precomputed import Bbox
 
     Segmentation(_flat_ds()).get_segmentation_cutout([[0, 0, 0], [800, 800, 800]])
 
@@ -273,7 +285,7 @@ def test_the_cutout_passes_a_bbox_not_a_list(_stub_volumes):
 
 def test_agglomerate_is_only_sent_to_graphene(_stub_volumes):
     """`agglomerate` rolls supervoxels up into roots. A flat volume has nothing to roll
-    up, and older cloud-volume chokes on the keyword."""
+    up, and no way to answer the question if asked."""
     Segmentation(_flat_ds()).get_segmentation_cutout([[0, 0, 0], [16, 16, 16]])
     _, _, opts = _stub_volumes[FLAT].downloads[0]
     assert "agglomerate" not in opts
