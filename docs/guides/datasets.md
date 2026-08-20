@@ -172,9 +172,11 @@ and CAVE (`flywire_fafb_public`, versions `630` and `783`).
   (Its `Neuron` nodes *do* carry a `predictedNt` — a per-neuron call, not a per-synapse
   one. connecto does not answer `transmitters=True` out of it, because that would be a
   different question wearing the same argument's clothes.)
-- **`nt` is `known_nt` where there is one, `top_nt` otherwise** — 87,832 neurons have a
-  measured transmitter, another 51,242 only a predicted one. Since those are evidence of
-  different kinds, `nt_source` says which you got.
+- **Neuron-level `nt` depends on the source you read.** The default neuPrint one has
+  only `predictedNt`; the published TSV (`annotations="public"`) has the *measured*
+  `known_nt` for 87,837 neurons and falls back to the predicted `top_nt` for another
+  51,248. Since those are evidence of different kinds, `nt_source` always says which you
+  got.
 - No `live` queries. The public release is a frozen release.
 
 ### `flywire-production` — FlyWire (FAFB) production

@@ -397,3 +397,74 @@ def test_dotprops_reject_a_unit_they_cannot_honour(ns, call):
     fn = getattr(getattr(ds, ns), call)
     with pytest.raises(ValueError, match="units"):
         fn([720575940604407468], units="parsecs")
+
+
+# ------------------------------------------------------- the documented matrices
+
+CAP_COLUMNS = {
+    "annot": Cap.ANNOTATIONS, "conn": Cap.CONNECTIVITY, "syn": Cap.SYNAPSES,
+    "scores": Cap.SYNAPSE_SCORES, "NT/syn": Cap.NT_PER_SYNAPSE,
+    "roi-conn": Cap.ROI_CONN, "rois": Cap.ROIS, "skel": Cap.SKELETONS,
+    "mesh": Cap.MESHES, "seg": Cap.SEGMENTATION, "cgraph": Cap.CHUNKEDGRAPH,
+    "vox": Cap.VOXELS, "proof": Cap.PROOFREADING, "soma": Cap.SOMAS,
+    "live": Cap.LIVE,
+}
+
+
+def _doc_matrix(path):
+    """Parse the `| dataset | ... |` table out of a markdown file."""
+    from pathlib import Path
+
+    lines = Path(path).read_text().splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("| dataset |"))
+    header = [c.strip() for c in lines[start].strip("|").split("|")]
+    rows, dataset = {}, None
+    for ln in lines[start + 2:]:
+        if not ln.startswith("|"):
+            break
+        cells = [c.strip() for c in ln.strip("|").split("|")]
+        dataset = cells[0].strip("`") or dataset
+        row = dict(zip(header, cells))
+        rows[(dataset, row["backend"].strip("*"))] = row
+    return rows
+
+
+@pytest.mark.parametrize("path", ["README.md", "docs/index.md"])
+def test_the_documented_capability_matrix_matches_the_code(path):
+    """The README and the landing page both hand-maintain the capability matrix, and
+    both say they are generated from it. They drifted anyway: when BANC, maleCNS and
+    MANC gained per-synapse transmitters the tables still showed FlyWire as the only
+    dataset with any, and neither had ever grown the `vox` column. A table that claims
+    to be generated has to be checkable, or it is just a comment that ages.
+    """
+    doc = _doc_matrix(path)
+    assert doc, f"no capability table found in {path}"
+
+    for (name, backend), row in doc.items():
+        spec = REGISTRY[name]
+        have = spec.capabilities_for(backend)
+        for label, cap in CAP_COLUMNS.items():
+            assert label in row, f"{path}: {name}/{backend} has no {label!r} column"
+            claimed = row[label] == "✅"
+            assert claimed == (cap in have), (
+                f"{path}: {name}/{backend} shows {label}={row[label]!r}, "
+                f"but capabilities_for({backend!r}) says {cap in have}"
+            )
+
+    # Every door in the registry must appear - a dataset silently missing from the
+    # table is the other way for it to be wrong.
+    doors = {(s.name, b.kind) for s in REGISTRY.values() for b in s.backends}
+    assert doors == set(doc), f"{path}: table covers {set(doc) ^ doors} differently"
+
+
+@pytest.mark.parametrize("path", ["README.md", "docs/index.md"])
+def test_the_documented_neuron_level_nt_column_matches_the_specs(path):
+    """`NT/neuron` is not a capability - it is whether the default annotation source
+    has an `nt` field - so nothing in `capability_matrix()` can hold it honest."""
+    for (name, backend), row in _doc_matrix(path).items():
+        spec = REGISTRY[name]
+        src = spec.annotation_source("auto")
+        fields = dict(spec.fields) | dict(src.fields if src else {})
+        assert (row["NT/neuron"] == "✅") == bool(fields.get("nt")), (
+            f"{path}: {name}/{backend} shows NT/neuron={row['NT/neuron']!r}"
+        )
