@@ -116,6 +116,7 @@ The short version:
 | chunkedgraph (`update_ids`, supervoxels) | · | ✅ |
 | proofreading, L2 cache | · | ✅ |
 | FlyWire per-synapse transmitters | · | ✅ |
+| BANC per-synapse transmitters | ✅ | ✅ (different model run) |
 | BANC skeletons, meshes, segmentation | · | ✅ |
 
 Everything a door cannot do **raises**, and the error names the door that can.
@@ -155,6 +156,12 @@ and CAVE (`flywire_fafb_public`, versions `630` and `783`).
 - **Per-synapse neurotransmitters are CAVE-only.** The neuPrint mirror's `Synapse` nodes
   do not carry them, so `synapses(x, transmitters=True)` raises there and tells you to
   use `backend="cave"`. It used to return a frame with no `nt` column and no error.
+  (Its `Neuron` nodes *do* carry a `predictedNt` — a per-neuron call, not a per-synapse
+  one. connecto does not answer `transmitters=True` out of it, because that would be a
+  different question wearing the same argument's clothes.)
+- **`nt` is `known_nt` where there is one, `top_nt` otherwise** — 87,832 neurons have a
+  measured transmitter, another 51,242 only a predicted one. Since those are evidence of
+  different kinds, `nt_source` says which you got.
 - No `live` queries. The public release is a frozen release.
 
 ### `flywire-production` — FlyWire (FAFB) production
@@ -194,6 +201,12 @@ v888. Served by **both** neuPrint (`banc:v888`, the default) and CAVE (mat 888).
   — so skeletons, meshes, cutouts and neuroglancer scenes are all absent there and raise,
   naming the CAVE door. (Left as a one-line deletion for when the server gains the
   stores.) Connectivity, synapses, annotations, somas and ROIs all work.
+- **Per-synapse transmitters through both doors — and they disagree.** Eight classes
+  either way, but CAVE serves a numbered model run (`synapses_v2_nt_prediction_5`) and
+  neuPrint's copy is a different run: on one neuron they agree on 57% of shared synapses,
+  while still agreeing on the neuron-level call. neuPrint gives you the full probability
+  vector; CAVE has already argmaxed, and covers only synapses of size ≥ 5, so some come
+  back with `nt` null. `syn.attrs["connecto"]["transmitters"]` says which you have.
 
 ### `fanc` — female adult nerve cord
 
@@ -273,6 +286,14 @@ possible. neuPrint, plus optional [Clio](https://clio.janelia.org) annotations
 > **Find it** [male-cns.janelia.org](https://male-cns.janelia.org/) ·
 > [neuPrint](https://neuprint.janelia.org/?dataset=male-cns:v1.0)
 
+- **Per-synapse transmitters**, seven classes (no tyramine, no `unknown`).
+- **Neuron-level `nt` is `consensusNt`, not `predictedNt`.** Both cover the same 174,165
+  bodies, so this is not about coverage: `predictedNt` is what the classifier said about
+  that body's synapses, while `consensusNt` reconciles it with the cell type's call and
+  with published evidence — which is why it says `unclear` for 9,793 bodies where
+  `predictedNt` says it for 22,902. Both stay in the frame, and `nt_source` records which
+  one each value came from.
+
 !!! note "There is no `optic-lobe` dataset"
 
     There used to be. It was the optic lobes of *this* specimen, released on their own —
@@ -298,6 +319,10 @@ hemilineages and predicted transmitters. neuPrint. The counterpart to CAVE-backe
 > **Find it** [Janelia FlyEM](https://www.janelia.org/project-team/flyem/manc-connectome) ·
 > [neuPrint](https://neuprint.janelia.org/?dataset=manc:v1.2.3)
 
+- **Per-synapse transmitters**, three classes plus an explicit `unknown`. That fourth
+  class is a prediction, not a gap — dropping it would make `nt` an argmax over three
+  columns that need not sum to 1, and every genuinely-unknown synapse would come back
+  confidently mislabelled as whichever of the three came closest.
 - Uses `LHS`/`RHS` for side, where hemibrain and maleCNS use `L`/`R`. connecto normalises
   both to `left`/`right`.
 - `type` coalesces `type` → `systematicType` → `instance`, so neurons with only a

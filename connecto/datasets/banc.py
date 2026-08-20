@@ -14,7 +14,14 @@ aspirational: both should return the same edges.
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec, Publication
+from ..core.spec import (
+    AnnotationSource,
+    BackendSpec,
+    Cap,
+    DatasetSpec,
+    Publication,
+    neuprint_nt_columns,
+)
 
 __all__ = ["BANC_SPEC", "BANC"]
 
@@ -77,6 +84,22 @@ BANC_SPEC = DatasetSpec(
                 # "cannot locate a DVID server".
                 Cap.VOXELS,
             },
+            # Eight transmitters, on the Synapse nodes - verified against the server
+            # and against a real body: 720575941350526512's presynapses come back
+            # serotonin-dominant, matching its own `predictedNt`. This is the wider
+            # door of the two for transmitters: BANC's *CAVE* copy keeps the same
+            # predictions in a reference table that only stores the winner, so the
+            # full probability vector is here and nowhere else.
+            nt_columns=neuprint_nt_columns(
+                "acetylcholine",
+                "gaba",
+                "glutamate",
+                "dopamine",
+                "serotonin",
+                "octopamine",
+                "histamine",
+                "tyramine",
+            ),
         ),
         BackendSpec(
             "cave",
@@ -84,6 +107,24 @@ BANC_SPEC = DatasetSpec(
             default_version=888,
             synapse_table="synapses_v2",
             nucleus_table="somas_v1a",
+            # Not columns on the synapse table: BANC keeps its predictions in a
+            # separate table, already argmaxed - one row per predicted synapse with
+            # the winning transmitter and its probability. Same eight classes as the
+            # neuPrint copy, but this door cannot give you the runner-up.
+            #
+            # The *view*, not the `synapses_v2_nt_prediction_5` reference table it
+            # wraps, and that is not cosmetic: the reference table can only be
+            # filtered by its own `target_id`, so using it would mean fetching the
+            # synapses, collecting their ids and sending them back as a filter - two
+            # round trips and a filter list the size of the neuron. The view exposes
+            # `pre_pt_root_id`/`post_pt_root_id`, so it takes the *same* filter as
+            # the synapse query, and it has already done the left join server-side.
+            #
+            # Only synapses of size >= 5 were predicted, so this covers a subset.
+            # connecto joins it onto the synapse frame rather than querying it
+            # instead, so `transmitters=True` returns the same synapses as
+            # `transmitters=False` - the unpredicted ones just have a null `nt`.
+            nt_table="synapses_v2_nt_prediction_5_human_readable",
         ),
     ),
     annotation_sources=(
@@ -123,6 +164,11 @@ BANC_SPEC = DatasetSpec(
             Cap.SKELETONS, Cap.MESHES, Cap.L2CACHE, Cap.SEGMENTATION, Cap.CHUNKEDGRAPH,
             Cap.SOMAS, Cap.NEUROGLANCER,
             Cap.VOXELS,
+            # Both doors have per-synapse transmitters, in two different shapes -
+            # see `nt_columns` on the neuPrint backend and `nt_table` on the CAVE
+            # one. Declared on the dataset because the *data* has them; which shape
+            # you get is the backend's business.
+            Cap.NT_PER_SYNAPSE,
         }
     ),
     # Central-brain neurons, valid in CAVE mat 888 *and* neuPrint banc:v888 - the

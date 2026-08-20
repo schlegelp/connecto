@@ -61,6 +61,23 @@ _FIELDS = {
 # FlyWire already speaks left/right/center. "na" is not a side.
 _SIDES = {"left": "left", "right": "right", "center": "center"}
 
+# Per-synapse transmitter probabilities, as FlyWire's synapse tables spell them.
+# The same six columns on the public view (`valid_synapses_nt_np_v6`) and on the
+# production table (`synapses_nt_v1`) it is built from, so both backends share them.
+#
+# Six, and there is no histamine - even though FlyWire has plenty of histaminergic
+# photoreceptors. The classifier has six classes, so the honest thing is six columns
+# and an `nt` that can never say "histamine", rather than a seventh column of zeros
+# implying it was considered and ruled out. (BANC's model, trained later, has eight.)
+_NT_COLUMNS = {
+    "ach": "acetylcholine",
+    "gaba": "gaba",
+    "glut": "glutamate",
+    "oct": "octopamine",
+    "ser": "serotonin",
+    "da": "dopamine",
+}
+
 # FlyWire's live FlyTable annotations are *two* SeaTable tables in two bases - the
 # central brain in `main.info`, the optic lobes in `optic_lobes.optic` -
 # concatenated, exactly as cocoa assembles them. Reading only `info` silently drops
@@ -133,7 +150,16 @@ FLYWIRE = DatasetSpec(
             # door does front a DVID server. Denying it here is what makes the error
             # name the CAVE door instead of failing later with "cannot locate a DVID
             # server for 'flywire-fafb:v783b'".
-            missing_capabilities={Cap.VOXELS},
+            #
+            # NT_PER_SYNAPSE for the reason in the comment above: verified against
+            # the server, this mirror's Synapse nodes carry exactly `bodyId`,
+            # `type`, `confidence`, `location` and their ROI flags - no `ntGabaProb`
+            # and no siblings. Its *Neuron* nodes do carry `predictedNt` and six
+            # probabilities, but that is a per-neuron call, not a per-synapse one,
+            # and answering `transmitters=True` out of it would be a different
+            # question than the one asked. Denied on this BackendSpec rather than
+            # backend-wide: banc and manc and male-cns really do have them.
+            missing_capabilities={Cap.VOXELS, Cap.NT_PER_SYNAPSE},
         ),
         BackendSpec(
             "cave",
@@ -147,6 +173,7 @@ FLYWIRE = DatasetSpec(
             edge_view="valid_connection_v2",
             nucleus_table="nuclei_v1",
             proofreading_table="proofread_neurons",
+            nt_columns=_NT_COLUMNS,
         ),
     ),
     annotation_sources=_ANNOTATIONS,
@@ -198,6 +225,7 @@ FLYWIRE_PRODUCTION = FLYWIRE.evolve(
             synapse_table="synapses_nt_v1",
             nucleus_table="nuclei_v1",
             proofreading_table="proofreading_status_public_v1",
+            nt_columns=_NT_COLUMNS,
         ),
     ),
     # NOT the flat v783 volume it would otherwise inherit from FLYWIRE. Production

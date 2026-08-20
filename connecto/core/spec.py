@@ -28,6 +28,8 @@ __all__ = [
     "BACKEND_LIMITS",
     "MULTI_SEP",
     "DIALECTS",
+    "TRANSMITTERS",
+    "neuprint_nt_columns",
 ]
 
 # The neuroglancer state schemas we can emit. See `DatasetSpec.viewer_dialect`.
@@ -38,6 +40,47 @@ DIALECTS = ("modern", "seunglab")
 # the two can never disagree - when they did, a FANC neuron tagged "MDN" was stored
 # as "MDN, MDN3, moonwalker descending neuron" and `ds.ids("MDN")` found nothing.
 MULTI_SEP = ", "
+
+# The transmitter vocabulary connecto normalises to. Datasets predict different
+# subsets of it - MANC three, male-cns seven, BANC eight - and name the columns
+# differently for the same molecule (`ach`, `ntAcetylcholineProb`, `acetylcholine`),
+# so every `BackendSpec.nt_columns` maps its raw names onto these and nothing else.
+# Without one vocabulary, `nt == "acetylcholine"` would be a per-dataset spelling
+# test and cross-dataset comparison - the point of the library - would not work.
+#
+# "unknown" is a member because MANC predicts it: its model has an explicit fourth
+# class for "none of these three", and folding that into NA would turn a confident
+# "not one of the fast transmitters" into a missing value, which is a different and
+# weaker claim.
+TRANSMITTERS = (
+    "acetylcholine",
+    "gaba",
+    "glutamate",
+    "dopamine",
+    "serotonin",
+    "octopamine",
+    "histamine",
+    "tyramine",
+    "unknown",
+)
+
+
+def neuprint_nt_columns(*transmitters: str) -> dict[str, str]:
+    """``{"ntGabaProb": "gaba", ...}`` - neuPrint's per-synapse probability keys.
+
+    neuPrint spells them ``nt<Transmitter>Prob``, so the mapping is mechanical.
+    *Which* transmitters a dataset predicts is not, and guessing is silent: `nt` is
+    an argmax over the columns we ask for, so naming one the dataset does not have
+    costs nothing, while omitting one it does have cannot raise - it can only
+    quietly return the runner-up. Hence an explicit list per dataset, verified
+    against the server's Synapse properties.
+    """
+    unknown = [t for t in transmitters if t not in TRANSMITTERS]
+    if unknown:
+        raise ValueError(
+            f"Not canonical transmitters: {unknown}. One of {list(TRANSMITTERS)}."
+        )
+    return {f"nt{t.capitalize()}Prob": t for t in transmitters}
 
 
 class Cap(str, Enum):
@@ -129,14 +172,15 @@ BACKEND_LIMITS: Mapping[str, frozenset[Cap]] = {
             Cap.PROOFREADING,
             Cap.L2CACHE,
             Cap.LIVE,
-            # Not structural - a gap in *our* backend. BANC's neuPrint copy really
-            # does carry per-synapse transmitter probabilities (`ntGabaProb`, ...)
-            # on its Synapse nodes; FlyWire's copy does not carry them at all. Our
-            # `_fetch_synapses` fetches neither. Until it does, claiming the
-            # capability would mean `transmitters=True` was silently ignored, so it
-            # is denied here and `transmitters=True` raises. Delete this line the
-            # day the backend learns to read those properties.
-            Cap.NT_PER_SYNAPSE,
+            # Note: NT_PER_SYNAPSE is *not* here, and used to be. It was denied
+            # backend-wide on the grounds that connecto could not read neuPrint's
+            # per-synapse transmitter properties - true at the time, but it stated a
+            # gap in our code as a fact about the server, and the two diverged as
+            # soon as the code was written. It is a per-*dataset* fact: banc, manc
+            # and male-cns carry `ntGabaProb` & co. on their Synapse nodes and now
+            # declare it; hemibrain and fish2 have no such properties, and FlyWire's
+            # mirror carries them on Neuron nodes but not Synapse ones - so that one
+            # says so on its own BackendSpec. See `BackendSpec.nt_columns`.
         }
     ),
 }
@@ -203,6 +247,51 @@ class BackendSpec:
     # not a capability. Whether the dataset *has* scores is Cap.SYNAPSE_SCORES.
     score_column: str = "cleft_score"
 
+    # --- Per-synapse transmitters. Whether the dataset *has* them is
+    # Cap.NT_PER_SYNAPSE; these say where they live and what they are called, which
+    # is a property of the (dataset, backend) pair and of nothing smaller.
+    #
+    # `nt_columns` maps a raw probability column onto a canonical transmitter:
+    # FlyWire's CAVE view calls them `ach`/`gaba`/`glut`, neuPrint calls the same
+    # things `ntAcetylcholineProb` & co. (see `neuprint_nt_columns`). One row per
+    # synapse, one column per transmitter, and `nt` is the argmax across them.
+    nt_columns: Mapping[str, str] = field(default_factory=dict)
+
+    # ...or, when the predictions are not columns on the synapse table at all.
+    # BANC's CAVE door keeps them in a separate table, one row per synapse carrying
+    # the winning transmitter and its probability rather than eight probability
+    # columns. So it needs a join, not a rename, and the frame it produces has
+    # `nt`/`nt_confidence` but no per-transmitter columns - which is also why
+    # `transmitter_source` reports no `classes` for such a door: the table records
+    # the choice, not what it was chosen from. The columns connecto reads off it
+    # are `_NT_TABLE_COLMAP` in the CAVE backend.
+    #
+    # It is also a *subset*: only synapses of size >= 5 were predicted. connecto
+    # therefore left-joins it rather than querying it instead of the synapse table,
+    # so `transmitters=True` returns the same synapses as `transmitters=False`,
+    # some of them with no call. Swapping the source would silently drop the rest.
+    nt_table: str | None = None
+
+    @property
+    def transmitter_source(self) -> dict | None:
+        """Which model run made this door's per-synapse calls, and over what classes.
+
+        ``None`` if this door has no per-synapse transmitters. Lives here because
+        the answer differs by *field*, not just by value: a door with `nt_columns`
+        names the server and knows its own classes, while a door with an `nt_table`
+        names the table and cannot know them - the table stores the winner, not the
+        vector it was chosen from. Deriving it from `nt_columns` alone reported no
+        classes at all for BANC's CAVE door, which is the one it was written for.
+        """
+        if self.nt_table:
+            return {"source": self.nt_table, "classes": None}
+        if self.nt_columns:
+            return {
+                "source": self.source,
+                "classes": sorted(set(self.nt_columns.values())),
+            }
+        return None
+
     def __post_init__(self):
         if self.kind not in BACKEND_LIMITS:
             raise ValueError(f"Unknown backend kind: {self.kind!r}")
@@ -212,6 +301,17 @@ class BackendSpec:
         object.__setattr__(
             self, "missing_capabilities", frozenset(self.missing_capabilities)
         )
+        object.__setattr__(self, "nt_columns", dict(self.nt_columns))
+        # A raw column may map only onto the canonical vocabulary. Caught here
+        # because the alternative is an `nt` column whose values are a spelling
+        # nobody else uses, discovered when a cross-dataset comparison finds no
+        # overlap and looks like biology.
+        rogue = sorted(set(self.nt_columns.values()) - set(TRANSMITTERS))
+        if rogue:
+            raise ValueError(
+                f"{self.source!r}: `nt_columns` maps onto {rogue}, which "
+                f"{'is' if len(rogue) == 1 else 'are'} not in TRANSMITTERS."
+            )
         if self.position_units not in (None, "nm", "voxel"):
             raise ValueError(
                 f"`position_units` must be 'nm', 'voxel' or None, got "
@@ -448,6 +548,22 @@ class DatasetSpec:
         object.__setattr__(self, "publications", tuple(self.publications))
         object.__setattr__(self, "capabilities", frozenset(self.capabilities))
         object.__setattr__(self, "backends", tuple(self.backends))
+
+        # A door that claims per-synapse transmitters must say where they live.
+        # This is the check that would have caught the bug this library was written
+        # about: `Cap.NT_PER_SYNAPSE` used to be a claim with nothing behind it, so
+        # `transmitters=True` returned a frame with no `nt` column and no error.
+        # Now the claim cannot be registered without the wiring that honours it.
+        for b in self.backends:
+            if (
+                Cap.NT_PER_SYNAPSE in self.capabilities_for(b.kind)
+                and b.transmitter_source is None
+            ):
+                raise ValueError(
+                    f"Dataset {self.name!r} claims {Cap.NT_PER_SYNAPSE} through the "
+                    f"{b.kind!r} backend but that BackendSpec declares neither "
+                    f"`nt_columns` nor `nt_table`, so nothing could serve it."
+                )
 
     def backend(self, kind: str | None = None) -> BackendSpec:
         """Get the backend spec of the given kind, or the default (the first)."""

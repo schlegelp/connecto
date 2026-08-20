@@ -500,3 +500,8 @@ class Dataset(ABC):
     def _raw_position_units(self) -> str:
         """What units this server's raw positions are in. schemas._rescale converts."""
         return self._backend.position_units or self._default_position_units
+
+    @property
+    def _transmitter_source(self) -> dict | None:
+        """Which model run made this door's transmitter calls. schemas stamps it."""
+        return self._backend.transmitter_source

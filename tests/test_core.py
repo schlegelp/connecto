@@ -255,3 +255,125 @@ def test_auto_prefers_a_public_source_but_falls_back_to_a_private_one():
 
     none_at_all = DatasetSpec(name="bare", backends=be, annotation_sources=())
     assert none_at_all.annotation_source("auto") is None  # genuinely nothing -> None
+
+
+# ----------------------------------------------------------------- transmitters
+
+def test_nt_is_an_argmax_over_the_declared_classes():
+    from connecto.core.schemas import add_transmitters
+
+    raw = pd.DataFrame(
+        {
+            "ach": [0.9, 0.1, np.nan],
+            "gaba": [0.05, 0.8, np.nan],
+            "glut": [0.05, 0.1, np.nan],
+        }
+    )
+    out = add_transmitters(
+        raw, {"ach": "acetylcholine", "gaba": "gaba", "glut": "glutamate"}, label="X"
+    )
+
+    assert out["nt"].tolist()[:2] == ["acetylcholine", "gaba"]
+    assert out["nt_confidence"].tolist()[:2] == pytest.approx([0.9, 0.8])
+    # A synapse nobody predicted is null, not a guess. BANC's neuPrint copy has
+    # 121 of these on one neuron, and `idxmax` raises on an all-NA row rather
+    # than returning NA - so this is the case that breaks first if it regresses.
+    assert pd.isna(out["nt"].iloc[2])
+    assert pd.isna(out["nt_confidence"].iloc[2])
+    # Renamed onto the canonical vocabulary, raw columns kept alongside.
+    assert out["nt_acetylcholine"].tolist()[:2] == pytest.approx([0.9, 0.1])
+    assert "ach" in out.columns
+
+
+def test_a_missing_transmitter_class_raises_rather_than_losing_quietly():
+    """`nt` is an argmax, so a class the server didn't return cannot show up as a
+    gap - it shows up as the runner-up, confidently. The only safe answer is to stop."""
+    from connecto.core.schemas import add_transmitters
+
+    raw = pd.DataFrame({"ach": [0.9], "gaba": [0.1]})
+    with pytest.raises(co.CapabilityError, match="ntGlutamateProb|glut"):
+        add_transmitters(
+            raw, {"ach": "acetylcholine", "gaba": "gaba", "glut": "glutamate"}, label="X"
+        )
+
+
+def test_transmitter_columns_must_use_the_canonical_vocabulary():
+    from connecto.core.spec import BackendSpec
+
+    with pytest.raises(ValueError, match="TRANSMITTERS"):
+        BackendSpec("cave", "x", nt_columns={"ach": "ACh"})
+
+
+def test_claiming_transmitters_without_wiring_is_unregisterable():
+    """The check that would have caught the bug this library was written about: a
+    capability is a promise, and `Cap.NT_PER_SYNAPSE` used to be one with nothing
+    behind it, so `transmitters=True` returned a frame with no `nt` and no error."""
+    from connecto.core.spec import BackendSpec, DatasetSpec
+
+    with pytest.raises(ValueError, match="nt_columns"):
+        DatasetSpec(
+            name="liar",
+            backends=(BackendSpec("cave", "x"),),
+            capabilities=frozenset({Cap.NT_PER_SYNAPSE}),
+        )
+
+
+def test_neuprint_no_longer_denies_transmitters_wholesale():
+    """It used to, and that stated a gap in connecto's code as a fact about the
+    server. banc, manc and male-cns all carry `ntGabaProb` & co. on their Synapse
+    nodes; hemibrain and fish2 genuinely do not, and FlyWire's mirror carries them
+    on Neuron nodes only - so the denial belongs per dataset, not per backend."""
+    from connecto.core.spec import BACKEND_LIMITS
+
+    assert Cap.NT_PER_SYNAPSE not in BACKEND_LIMITS["neuprint"]
+
+    m = co.capability_matrix()
+    for name in ("banc", "manc", "malecns"):
+        assert _row(m, name, "neuprint")["nt_per_synapse"], name
+    for name in ("hemibrain", "fish2"):
+        assert not _row(m, name, "neuprint")["nt_per_synapse"], name
+    # BANC is the one dataset that has them through *both* doors.
+    assert co.get_spec("banc").backends_with(Cap.NT_PER_SYNAPSE) == ("neuprint", "cave")
+
+
+def test_nt_records_which_column_it_came_from():
+    """`known_nt` is somebody's immunostaining; `top_nt` is a CNN's argmax. Coalescing
+    them into one column without saying which would let "this neuron is GABAergic"
+    mean either "we measured it" or "a model thinks so"."""
+    raw = pd.DataFrame(
+        {
+            "root_id": [1, 2, 3],
+            "known_nt": ["acetylcholine", "", None],
+            "top_nt": ["gaba", "glutamate", None],
+        }
+    )
+
+    class _DS(_FakeDS):
+        class spec(_FakeSpec):
+            fields = {"nt": ("known_nt", "top_nt")}
+
+    out = normalize_annotations(raw, _DS(), id_column="root_id")
+
+    assert out["nt"].tolist()[:2] == ["acetylcholine", "glutamate"]
+    assert pd.isna(out["nt"].iloc[2])  # blank in both -> no call
+    assert out["nt_source"].tolist()[:2] == ["known_nt", "top_nt"]
+    assert pd.isna(out["nt_source"].iloc[2])  # no value -> no source
+    # It sits next to the column it explains.
+    assert list(out.columns).index("nt_source") == list(out.columns).index("nt") + 1
+
+
+def test_a_raw_nt_source_column_does_not_get_clobbered():
+    """FlyWire and BANC both carry `known_nt_source` - a *citation*. Nothing carries
+    `nt_source` today, but if one ever does it means something else, so it steps aside
+    rather than being overwritten by ours."""
+    raw = pd.DataFrame(
+        {"root_id": [1], "top_nt": ["gaba"], "nt_source": ["Davis et al., 2020"]}
+    )
+
+    class _DS(_FakeDS):
+        class spec(_FakeSpec):
+            fields = {"nt": ("top_nt",)}
+
+    out = normalize_annotations(raw, _DS(), id_column="root_id")
+    assert out["nt_source"].tolist() == ["top_nt"]
+    assert out["nt_source_raw"].tolist() == ["Davis et al., 2020"]

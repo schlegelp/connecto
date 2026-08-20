@@ -7,12 +7,14 @@ sees - column names, dtypes, units, capability errors - is applied above this, i
 
 from __future__ import annotations
 
+import functools
 import logging
 from datetime import UTC
 
 import numpy as np
 import pandas as pd
 
+from ...core import schemas
 from ...core.dataset import Dataset, namespace
 from ...core.namespaces import (
     Annotations,
@@ -25,7 +27,7 @@ from ...core.namespaces import (
     Voxels,
 )
 from ...core.segmentation import Segmentation
-from ...core.spec import Cap
+from ...core.spec import TRANSMITTERS, Cap
 from ...core.version import Version
 from ...exceptions import CapabilityError
 from . import versions as _versions
@@ -36,15 +38,15 @@ logger = logging.getLogger("connecto")
 
 __all__ = ["CAVEDataset"]
 
-# FlyWire-style per-synapse transmitter probability columns.
-NT_COLUMNS = {
-    "ach": "acetylcholine",
-    "gaba": "gaba",
-    "glut": "glutamate",
-    "oct": "octopamine",
-    "ser": "serotonin",
-    "da": "dopamine",
-}
+# What connecto needs off a `BackendSpec.nt_table`. Canonical -> raw, the same
+# direction as `_edge_colmap` and `_SYNAPSE_COLMAP` below.
+#
+# Hardcoded rather than put on the spec because exactly one dataset has an
+# `nt_table` - BANC - and a configuration knob with one possible value is a worse
+# description of reality than a named constant is. Give the second such dataset
+# different column names and this becomes a spec field; until then it would be
+# generality nobody asked for. The lookup below fails loudly if the names drift.
+_NT_TABLE_COLMAP = {"id": "synapse_id", "nt": "type", "nt_confidence": "value"}
 
 _CLIENTS: dict = {}
 
@@ -277,9 +279,51 @@ class CAVEDataset(Dataset):
             df = df[df["neuropil"].isin(np.atleast_1d(rois))]
 
         if transmitters:
-            df = _add_nt(df, self.label)
+            df = self._add_transmitters(df, version, filters)
 
         return df.reset_index(drop=True)
+
+    def _add_transmitters(self, df, version, filters) -> pd.DataFrame:
+        """Per-synapse transmitters, from wherever this datastack keeps them.
+
+        Two shapes, because the datastacks have two. FlyWire's synapse view carries
+        a probability column per transmitter, so the call is an argmax across the
+        row. BANC keeps its predictions in a separate table that has already made
+        the call, so this is a join - and one that must be a *left* join, because
+        that table covers only the synapses big enough to have been predicted.
+        """
+        b = self._backend
+        if not b.nt_table:
+            return schemas.add_transmitters(df, b.nt_columns, label=self.label)
+
+        nt = self._query(
+            b.nt_table,
+            is_view=b.nt_table in _list_views(self.client),
+            filter_in_dict=filters or None,
+            select_columns=list(_NT_TABLE_COLMAP.values()),
+            **self._mat_kwargs(version),
+        )
+        missing = [c for c in _NT_TABLE_COLMAP.values() if c not in nt.columns]
+        if missing:
+            raise CapabilityError(
+                f"{self.label}: transmitter table {b.nt_table!r} has no "
+                f"{', '.join(missing)} column(s) - it is not the shape connecto "
+                f"expects (got {list(nt.columns)})."
+            )
+        nt = schemas._consume(nt, _NT_TABLE_COLMAP)[list(_NT_TABLE_COLMAP)]
+
+        # The table spells the transmitter out, so it needs no argmax - but it does
+        # need to be held to the same vocabulary as every other dataset, or `nt ==
+        # "acetylcholine"` becomes a per-dataset spelling test.
+        nt["nt"] = nt["nt"].str.lower()
+        rogue = sorted(set(nt["nt"].dropna().unique()) - set(TRANSMITTERS))
+        if rogue:
+            raise CapabilityError(
+                f"{self.label}: transmitter table {b.nt_table!r} returned "
+                f"{rogue}, which are not canonical transmitters."
+            )
+
+        return df.merge(nt, on="id", how="left")
 
     # ---------------------------------------------------------------- morphology
 
@@ -330,25 +374,17 @@ class CAVEDataset(Dataset):
         return out.reset_index(drop=True)
 
 
+@functools.cache
 def _list_views(client) -> set:
+    """Which materialized views this datastack has. Cached per client.
+
+    An uncached HTTP GET, and it is asked on every synapse query - once by
+    `_synapse_source` and, on a dataset with an `nt_table`, again per transmitter
+    join. That is four round trips for one `transmitters()` call, for a list that
+    changes when somebody creates a view. Clients are already process-cached in
+    `_CLIENTS`, so keying on the client caches for exactly as long as they live.
+    """
     try:
         return set(client.materialize.get_views())
     except Exception:
         return set()
-
-
-def _add_nt(df: pd.DataFrame, label: str) -> pd.DataFrame:
-    """Derive a single `nt` call from per-synapse transmitter probabilities."""
-    present = [c for c in NT_COLUMNS if c in df.columns]
-    if not present:
-        raise CapabilityError(
-            f"{label}: synapse table has no transmitter probability columns."
-        )
-    probs = df[present].astype("float32")
-    df = df.copy()
-    df["nt"] = probs.idxmax(axis=1).map(NT_COLUMNS)
-    df["nt_confidence"] = probs.max(axis=1)
-    for short, full in NT_COLUMNS.items():
-        if short in df.columns:
-            df[f"nt_{full}"] = df[short].astype("float32")
-    return df

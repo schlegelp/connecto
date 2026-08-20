@@ -222,6 +222,49 @@ def test_capabilities_are_honest(ds):
                 getattr(ds, ns)
 
 
+def test_transmitters_are_real_where_they_are_claimed(ds):
+    """The other half of `test_capabilities_are_honest`: an undeclared capability
+    must raise, and a declared one must *work*. Before this, `Cap.NT_PER_SYNAPSE`
+    was a claim no test could hold anyone to.
+    """
+    from connecto.core.spec import TRANSMITTERS
+
+    if not ds.supports(Cap.NT_PER_SYNAPSE):
+        pytest.skip("no per-synapse transmitters")
+
+    x = ds.spec.example_ids[0]
+    plain = ds.connectivity.synapses(x, pre=True, post=False)
+    nt = ds.connectivity.synapses(x, pre=True, post=False, transmitters=True)
+
+    # Asking for transmitters must not change *which* synapses you get. BANC's CAVE
+    # door keeps its predictions in a table covering only synapses of size >= 5, so
+    # the tempting implementation - query that table instead - would silently drop
+    # the rest and look like a cleaner result.
+    assert len(nt) == len(plain), (
+        f"{ds.label}: transmitters=True returned {len(nt)} synapses, "
+        f"transmitters=False returned {len(plain)}"
+    )
+
+    assert "nt" in nt.columns, f"{ds.label} claims transmitters but returned no `nt`"
+    called = nt["nt"].dropna()
+    assert len(called), f"{ds.label} returned an all-null `nt` for its own example"
+
+    rogue = sorted(set(called.astype(str)) - set(TRANSMITTERS))
+    assert not rogue, f"{ds.label} returned non-canonical transmitters: {rogue}"
+
+    conf = nt["nt_confidence"].dropna()
+    assert ((conf >= 0) & (conf <= 1)).all(), f"{ds.label}: nt_confidence out of [0, 1]"
+
+    # And the per-neuron roll-up built on top of it.
+    top = ds.connectivity.transmitters(x)
+    assert set(top.columns) == {"id", "nt", "confidence"}
+    assert len(top), f"{ds.label}: transmitters() returned nothing"
+
+    # Provenance: BANC's two doors serve different runs of the same model and
+    # disagree on ~43% of shared synapses, so a frame has to say which it holds.
+    assert nt.attrs["connecto"]["transmitters"]["source"]
+
+
 def test_the_l2_cache_actually_works_where_it_is_claimed(ds):
     """`Cap.L2CACHE` used to gate nothing user-facing: it was an internal hint to the
     skeleton fallback, so five datasets could claim it with no test able to hold them

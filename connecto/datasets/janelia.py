@@ -9,7 +9,14 @@ IDs for them. Use `malecns` and select the optic-lobe ROIs.
 from __future__ import annotations
 
 from ..core.registry import register
-from ..core.spec import AnnotationSource, BackendSpec, Cap, DatasetSpec, Publication
+from ..core.spec import (
+    AnnotationSource,
+    BackendSpec,
+    Cap,
+    DatasetSpec,
+    Publication,
+    neuprint_nt_columns,
+)
 
 __all__ = [
     "HEMIBRAIN", "MALECNS", "MANC_SPEC", "FISH2",
@@ -51,6 +58,14 @@ _NEUPRINT_SEG_CAPS = _NEUPRINT_CAPS | {Cap.SEGMENTATION}
 # Claimed only where a real body was actually fetched and its extent sanity-checked,
 # on all four: hemibrain 1734350788, maleCNS 10001, MANC 13438, fish2 100000001.
 _DVID_CAPS = _NEUPRINT_SEG_CAPS | {Cap.VOXELS}
+
+# Note that NT_PER_SYNAPSE is in none of the sets above, and is added by maleCNS and
+# MANC individually. It is not a neuPrint property, nor a DVID one: it is a property
+# of whether somebody ran a transmitter classifier over *that* volume and loaded the
+# result. They did for male-cns (seven transmitters) and MANC (three plus unknown);
+# they did not for hemibrain v1.2.1, whose Synapse nodes carry only `confidence`,
+# `location` and `type`, and not for fish2 - a fish, whose neurons are nobody's fly
+# classifier's business. Verified by reading the Synapse properties off all four.
 
 # Janelia's side vocabularies. hemibrain/maleCNS use L/R/M; MANC uses LHS/RHS.
 _LRM = {"L": "left", "R": "right", "M": "center", "C": "center"}
@@ -142,7 +157,24 @@ MALECNS = DatasetSpec(
         "clio": "https://clio.janelia.org/",
         "data": "https://male-cns.janelia.org/download/",
     },
-    backends=(BackendSpec("neuprint", "neuprint-cns.janelia.org/male-cns:v1.0"),),
+    backends=(
+        BackendSpec(
+            "neuprint",
+            "neuprint-cns.janelia.org/male-cns:v1.0",
+            # Seven, on the Synapse nodes. No tyramine and no `unknown` class -
+            # unlike BANC (eight) and MANC (three plus `unknown`), which is why
+            # these are declared per dataset and not once for "neuPrint".
+            nt_columns=neuprint_nt_columns(
+                "acetylcholine",
+                "gaba",
+                "glutamate",
+                "dopamine",
+                "serotonin",
+                "octopamine",
+                "histamine",
+            ),
+        ),
+    ),
     annotation_sources=(
         _NP,
         # clio is the live curation DB; neuPrint is a snapshot of it.
@@ -155,7 +187,16 @@ MALECNS = DatasetSpec(
         "type": ("type", "flywireType", "hemibrainType", "mancType"),
         "side": ("somaSide", "rootSide"),
         "class": ("class", "subclass"),
-        "nt": ("predictedNt",),
+        # `consensusNt` first, not `predictedNt`. They are equally populated
+        # (174,165 of 176,422 bodies each), so this is not about coverage: it is
+        # that they answer different questions. `predictedNt` is what the classifier
+        # said about *this body's* synapses; `consensusNt` reconciles that with the
+        # cell type's call and with published evidence, which is why it says
+        # "unclear" for 9,793 bodies where `predictedNt` says it for 22,902.
+        #
+        # Both stay in the frame as raw columns, and `nt_source` records which one
+        # each value came from - so preferring one here costs you nothing.
+        "nt": ("consensusNt", "predictedNt"),
         "status": ("status",),
         "soma": ("soma_x", "soma_y", "soma_z"),
     },
@@ -163,7 +204,7 @@ MALECNS = DatasetSpec(
     voxel_size=(8, 8, 8),
     template_space="JRCFIB2022Mraw",
     segmentation_source="precomputed://gs://flyem-male-cns/v1.0/segmentation",
-    capabilities=_DVID_CAPS,
+    capabilities=_DVID_CAPS | {Cap.NT_PER_SYNAPSE},
     example_ids=(10001, 10002),
 )
 
@@ -213,7 +254,21 @@ MANC_SPEC = DatasetSpec(
         "website": "https://www.janelia.org/project-team/flyem/manc-connectome",
         "neuprint": "https://neuprint.janelia.org/?dataset=manc:v1.2.3",
     },
-    backends=(BackendSpec("neuprint", "neuprint.janelia.org/manc:v1.2.3"),),
+    backends=(
+        BackendSpec(
+            "neuprint",
+            "neuprint.janelia.org/manc:v1.2.3",
+            # Three transmitters and an explicit fourth class. `unknown` is a
+            # prediction here, not a gap: the model was trained on a VNC where the
+            # fast transmitters are the question, and a confident "none of these"
+            # is an answer. Dropping it would make `nt` the argmax of three columns
+            # that need not sum to 1, and every `unknown` synapse would be
+            # confidently mislabelled as whichever of the three came closest.
+            nt_columns=neuprint_nt_columns(
+                "acetylcholine", "gaba", "glutamate", "unknown"
+            ),
+        ),
+    ),
     annotation_sources=(_NP,),
     fields={
         "type": ("type", "systematicType", "instance"),
@@ -229,7 +284,7 @@ MANC_SPEC = DatasetSpec(
     # mismatch - v1.2.3 is a database revision on the same segmentation - and the
     # T-bar check confirms it: MDN's synapses land in MDN.
     segmentation_source="precomputed://gs://manc-seg-v1p2/manc-seg-v1.2",
-    capabilities=_DVID_CAPS,
+    capabilities=_DVID_CAPS | {Cap.NT_PER_SYNAPSE},
     example_ids=(13438, 13809),  # two MDNs (moonwalker descending neurons)
 )
 

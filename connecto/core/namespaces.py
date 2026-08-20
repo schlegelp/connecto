@@ -242,6 +242,18 @@ class Connectivity(_Namespace):
         hemibrain has never heard of. ``extra=True`` keeps whatever else the
         backend happened to return.
 
+        On FlyWire's CAVE door that "whatever else" is worth knowing about: its
+        pre-aggregated edge view carries the six transmitter probabilities
+        *averaged over the connection*, plus their standard deviations, so
+
+            fw.connectivity.edges(x, extra=True)[["pre", "post", "ach", "ach_std"]]
+
+        gives you a per-connection transmitter profile without touching a single
+        synapse. Only on that door, and only when ``by_roi=False`` - the by-ROI path
+        aggregates synapses itself and has nothing extra to hand over. For the
+        per-synapse detail, or for any other dataset, use ``synapses(transmitters=
+        True)`` and ``transmitters()``, which are the same numbers unaveraged.
+
         ``autapses`` (pre == post) default to **off**. They are nearly always
         segmentation errors, neuPrint omits them entirely, and caveclient's own
         ``synapse_query`` drops them by default - so leaving them in would make the

@@ -11,6 +11,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from ...core import schemas
 from ...core.dataset import Dataset, namespace
 from ...core.namespaces import (
     Annotations,
@@ -215,20 +216,45 @@ class NeuPrintDataset(Dataset):
     def _fetch_synapses(
         self, pre, post, version, *, min_score=None, transmitters=False, rois=None, **kw
     ) -> pd.DataFrame:
-        from neuprint import SynapseCriteria as SC
-        from neuprint import fetch_synapse_connections
+        if transmitters:
+            # neuprint-python cannot ask for the transmitter properties, so this
+            # path is ours. Same match pattern, same frame, extra columns.
+            from .synapses import fetch_synapses_with_transmitters
 
-        src = self._criteria(pre) if pre is not None else None
-        tgt = self._criteria(post) if post is not None else None
+            syn = fetch_synapses_with_transmitters(
+                self, pre, post, nt_columns=self._backend.nt_columns, rois=rois
+            )
+        else:
+            # An explicit Segment-matching criteria on the *unconstrained* side,
+            # rather than None - exactly as `_fetch_edges` does, and for the same
+            # reason: `fetch_synapse_connections` turns a None into neuprint's
+            # default criteria, which matches `:Neuron` only and so drops every
+            # partner that is a mere `:Segment` fragment.
+            #
+            # This was silently costing 81% of BANC's synapses - one body returned
+            # 187 rows here and 994 through `edges()`, which counts fragments
+            # because that call already passes explicit criteria. So `synapses(x)`
+            # and `synapse_counts(x)` disagreed by 5x on the same neuron, and
+            # neither said why.
+            from neuprint import SynapseCriteria as SC
+            from neuprint import fetch_synapse_connections
 
-        sc = SC(rois=rois, client=self.client) if rois is not None else None
-        syn = fetch_synapse_connections(
-            source_criteria=src, target_criteria=tgt,
-            synapse_criteria=sc, client=self.client,
-        )
+            src = self._criteria(pre)
+            tgt = self._criteria(post)
+
+            sc = SC(rois=rois, client=self.client) if rois is not None else None
+            syn = fetch_synapse_connections(
+                source_criteria=src, target_criteria=tgt,
+                synapse_criteria=sc, client=self.client,
+            )
 
         if min_score is not None:
             syn = syn[syn["confidence_pre"] >= min_score]
+
+        if transmitters:
+            syn = schemas.add_transmitters(
+                syn, self._backend.nt_columns, label=self.label
+            )
 
         return syn.reset_index(drop=True)
 

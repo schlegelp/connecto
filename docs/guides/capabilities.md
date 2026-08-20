@@ -177,12 +177,29 @@ The cave backend does: cn.get_dataset("flywire", backend="cave").
 Note the last sentence. A refusal that names the door which *would* have worked is the
 difference between a dead end and a next step.
 
-The narrowing is declared once, on the backend, rather than per dataset
-(`spec.BACKEND_LIMITS`) — neuPrint serves frozen snapshots, so it can never have
-supervoxels, an edit history, an L2 cache, or a "right now" query. The *widening* is
-declared per dataset, because it is a fact about that pairing: both neuPrint copies ship
-an ROI hierarchy their CAVE datastack has no equivalent of, so `ds.rois` appears when you
+Some narrowing is declared once, on the backend (`spec.BACKEND_LIMITS`) — neuPrint serves
+frozen snapshots, so it can never have supervoxels, an edit history, an L2 cache, or a
+"right now" query. That list is deliberately short, and it holds only things that are
+true of the *backend*, whatever dataset it is serving.
+
+Per-synapse transmitters used to be on it, and should not have been. They were denied
+backend-wide on the grounds that connecto could not read neuPrint's transmitter
+properties — which was true of connecto, and said nothing about neuPrint. `banc`, `manc`
+and `male-cns` all carry them on their `Synapse` nodes; FlyWire's mirror is the exception,
+not the rule. Stating a gap in our own code as a fact about somebody's server is a
+comfortable mistake to make, and the fix is the same one this page is about: put the
+claim where the fact is. FlyWire's neuPrint door now denies it on its own `BackendSpec`,
+and the other three declare it.
+
+The *widening* is declared per dataset for the same reason: both neuPrint copies ship an
+ROI hierarchy their CAVE datastack has no equivalent of, so `ds.rois` appears when you
 come in through neuPrint and vanishes when you don't.
+
+A capability is also not allowed to be a bare claim. A dataset that declares
+`NT_PER_SYNAPSE` must also say, on the backend, *where* the transmitters live — the
+probability columns to argmax over, or the table to join. A spec that promises without
+wiring raises at import, which is the failure this whole page describes, caught before
+anybody can run into it.
 
 ```python
 cn.get_spec("flywire").backends_with(cn.Cap.CHUNKEDGRAPH)   # ('cave',)
@@ -221,19 +238,19 @@ cn.capability_matrix()
 ```
 
 ```
-                     backend  annotations  connectivity  synapses  synapse_scores  nt_per_synapse  roi_connectivity   rois  skeletons  meshes  l2cache  segmentation  chunkedgraph  proofreading  somas   live  neuroglancer
-aedes                   cave         True          True      True           False           False             False  False       True    True     True          True          True         False   True   True          True
-banc                neuprint         True          True      True           False           False              True   True      False   False    False         False         False         False   True  False         False
-banc                    cave         True          True      True           False           False              True  False       True    True     True          True          True         False   True  False          True
-fanc                    cave         True          True      True            True           False             False  False       True    True     True          True          True          True   True   True          True
-fish2               neuprint         True          True      True            True           False              True   True       True    True    False         False         False         False   True  False         False
-flywire             neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False          True
-flywire                 cave         True          True      True            True            True              True  False       True    True    False          True          True          True   True  False          True
-flywire-production      cave         True          True      True            True            True              True  False       True    True     True          True          True          True   True   True          True
-hemibrain           neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
-malecns             neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
-manc                neuprint         True          True      True            True           False              True   True       True    True    False          True         False         False   True  False         False
-microns                 cave         True          True      True           False           False             False  False       True    True     True          True          True         False   True  False          True
+                     backend  annotations  connectivity  synapses  synapse_scores  nt_per_synapse  roi_connectivity   rois  skeletons  meshes  l2cache  segmentation  chunkedgraph  voxels  proofreading  somas   live  neuroglancer
+aedes                   cave         True          True      True           False           False             False  False       True    True     True          True          True    True         False   True   True          True
+banc                neuprint         True          True      True           False            True              True   True      False   False    False         False         False   False         False   True  False         False
+banc                    cave         True          True      True           False            True              True  False       True    True     True          True          True    True         False   True  False          True
+fanc                    cave         True          True      True            True           False             False  False       True    True     True          True          True    True          True   True   True          True
+fish2               neuprint         True          True      True            True           False              True   True       True    True    False         False         False    True         False   True  False         False
+flywire             neuprint         True          True      True            True           False              True   True       True    True    False          True         False   False         False   True  False          True
+flywire                 cave         True          True      True            True            True              True  False       True    True    False          True          True    True          True   True  False          True
+flywire-production      cave         True          True      True            True            True              True  False       True    True     True          True          True    True          True   True   True          True
+hemibrain           neuprint         True          True      True            True           False              True   True       True    True    False          True         False    True         False   True  False         False
+malecns             neuprint         True          True      True            True            True              True   True       True    True    False          True         False    True         False   True  False         False
+manc                neuprint         True          True      True            True            True              True   True       True    True    False          True         False    True         False   True  False         False
+microns                 cave         True          True      True           False           False             False  False       True    True     True          True          True    True         False   True  False          True
 ```
 
 One row per **door**, not per dataset — `banc` and `flywire` each appear twice, because

@@ -121,8 +121,8 @@ fw.annotations.fields
 ```python
 {'type': ('cell_type', 'hemibrain_type'),
  'side': ('side',),
- 'class': ('super_class',),
- 'nt': ('top_nt',),
+ 'class': ('super_class', 'cell_class'),
+ 'nt': ('known_nt', 'top_nt'),
  ...}
 ```
 
@@ -166,16 +166,50 @@ ann.columns.tolist()
 ```
 
 ```
-['id', 'type', 'side', 'class', 'nt', 'status', 'soma_x', 'soma_y', 'soma_z',
- 'supervoxel_id', 'pos_x', 'pos_y', 'pos_z', 'nucleus_id', 'flow', 'super_class',
- 'cell_class', 'cell_sub_class', 'supertype', 'cell_type', 'hemibrain_type',
- 'ito_lee_hemilineage', 'hartenstein_hemilineage', 'top_nt', 'top_nt_conf',
- 'known_nt', 'known_nt_source', 'nerve', 'vfb_id', 'fbbt_id', 'dimorphism',
- 'matching_notes', 'fru_dsx', 'synonyms']
+['id', 'type', 'side', 'class', 'nt', 'nt_source', 'status', 'soma_x', 'soma_y',
+ 'soma_z', 'supervoxel_id', 'pos_x', 'pos_y', 'pos_z', 'nucleus_id', 'flow',
+ 'super_class', 'cell_class', 'cell_sub_class', 'supertype', 'cell_type',
+ 'hemibrain_type', 'ito_lee_hemilineage', 'hartenstein_hemilineage', 'top_nt',
+ 'top_nt_conf', 'known_nt', 'known_nt_source', 'nerve', 'vfb_id', 'fbbt_id',
+ 'dimorphism', 'matching_notes', 'fru_dsx', 'synonyms']
 ```
 
-The first nine are **canonical** — the same names, same dtypes, same units on every
+The first ten are **canonical** — the same names, same dtypes, same units on every
 dataset. The remaining twenty-five are FlyWire's own, passed through untouched.
+
+### `nt` is coalesced too — and says so
+
+`nt` follows the same first-non-null rule as `type`, but it is the one canonical column
+that comes with a companion saying where each value came from:
+
+```python
+fw.annotations.get("DA1_lPN")[["id", "nt", "nt_source"]]
+```
+
+```
+                   id             nt nt_source
+0  720575940604407468  acetylcholine  known_nt
+1  720575940623543881  acetylcholine  known_nt
+```
+
+The reason is that a dataset's transmitter columns are not interchangeable opinions the
+way its type columns are — they are different *kinds* of claim. FlyWire's `known_nt` is
+somebody's immunostaining or RT-PCR; `top_nt` is a CNN's argmax over a T-bar image. Of
+139,244 neurons, 87,832 have the former and another 51,242 only the latter. Without
+`nt_source`, "this neuron is GABAergic" would mean either "we measured it" or "a model
+thinks so", with no way to tell which — and the two belong on different sides of an
+argument.
+
+So filtering on evidence is a column comparison:
+
+```python
+ann = fw.annotations.get()
+measured = ann[ann["nt_source"] == "known_nt"]
+```
+
+It is there even when a dataset has only one transmitter column, because *which* one it
+is still matters: aedes has `neurotransmitter_verified` and no predictions at all, and
+`nt_source` is how you find that out without reading the spec.
 
 Annotations are an *open* schema, and that is the opposite choice from edges. Edges
 are closed because you compare them across datasets. Annotations are open because

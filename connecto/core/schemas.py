@@ -23,7 +23,10 @@ from datetime import UTC, datetime
 import numpy as np
 import pandas as pd
 
+from ..exceptions import CapabilityError
+
 __all__ = [
+    "add_transmitters",
     "EDGE_DTYPES",
     "SYNAPSE_DTYPES",
     "ANNOTATION_DTYPES",
@@ -49,6 +52,7 @@ SYNAPSE_DTYPES = {
     "score": "float32",
     "roi": "category",
     "nt": "category",
+    "nt_confidence": "float32",
 }
 
 ANNOTATION_DTYPES = {
@@ -57,6 +61,7 @@ ANNOTATION_DTYPES = {
     "side": "category",
     "class": "string",
     "nt": "category",
+    "nt_source": "category",
     "status": "string",
     "soma_x": "float32",
     "soma_y": "float32",
@@ -158,6 +163,61 @@ def _rescale(df, prefixes, ds, units: str, have: str | None = None):
     return df
 
 
+def add_transmitters(
+    df: pd.DataFrame, nt_columns: dict[str, str], *, label: str
+) -> pd.DataFrame:
+    """Collapse per-synapse transmitter probabilities into a single call.
+
+    ``nt_columns`` maps raw probability columns onto canonical transmitter names -
+    ``{"ach": "acetylcholine"}`` on FlyWire's CAVE view, ``{"ntGabaProb": "gaba"}``
+    on neuPrint. See :attr:`BackendSpec.nt_columns`.
+
+    Adds ``nt`` (the winner), ``nt_confidence`` (its probability) and one
+    ``nt_<transmitter>`` column per class. Lives here rather than in either backend
+    because it is normalisation, and both backends need exactly the same argmax over
+    differently-spelled columns.
+
+    Missing columns raise. A transmitter class that the spec declares and the server
+    did not return cannot be detected downstream - ``nt`` is an argmax, so losing a
+    class does not produce a gap, it produces a confident wrong answer.
+    """
+    missing = [c for c in nt_columns if c not in df.columns]
+    if not nt_columns or missing:
+        raise CapabilityError(
+            f"{label}: synapse frame is missing transmitter column(s) "
+            f"{', '.join(sorted(missing)) or '(none declared)'}. `nt` is an argmax "
+            f"across all of them, so continuing would silently return the best of "
+            f"the wrong classes."
+        )
+
+    # Converted once, straight to the target dtype. Going through
+    # `.apply(pd.to_numeric)` would build a float64 frame and convert it again -
+    # two full passes and a transient twice the size of the result.
+    probs = pd.DataFrame(
+        {c: pd.to_numeric(df[c], errors="coerce").astype("float32") for c in nt_columns},
+        index=df.index,
+    )
+    values = probs.to_numpy()
+
+    # A synapse with no prediction at all is normal - BANC's neuPrint copy has
+    # them - and pandas' `idxmax` raises on an all-NA row rather than returning NA.
+    # Filling to -inf makes the argmax total, and the winning probability is NaN
+    # exactly on those rows, so it doubles as the mask to put them back: "not
+    # predicted" and "predicted as X" are different, and both are true of some row
+    # of this frame.
+    winner = np.argmax(np.nan_to_num(values, nan=-np.inf), axis=1)
+    conf = values[np.arange(len(values)), winner]
+    names = np.array(list(nt_columns.values()), dtype=object)
+
+    out = pd.concat(
+        [df, probs.rename(columns={raw: f"nt_{t}" for raw, t in nt_columns.items()})],
+        axis=1,
+    )
+    out["nt"] = np.where(np.isnan(conf), None, names[winner])
+    out["nt_confidence"] = conf
+    return out
+
+
 def normalize_edges(
     raw: pd.DataFrame, ds, *, colmap: dict[str, str], version=None, extra: bool = False
 ) -> pd.DataFrame:
@@ -219,33 +279,56 @@ def normalize_synapses(
             "id", "pre", "post",
             "pre_x", "pre_y", "pre_z",
             "post_x", "post_y", "post_z",
-            "score", "roi", "nt",
+            "score", "roi", "nt", "nt_confidence",
         ],
     )
-    return stamp(
+    out = stamp(
         df, ds, query="synapses", version=version, raw_columns=list(raw.columns)
     )
+    if "nt" in out.columns:
+        # Which model run made these calls. Not pedantry: BANC's CAVE door serves
+        # `synapses_v2_nt_prediction_5` while its neuPrint door serves an earlier
+        # run of the same eight-class model, and on one neuron they agree on only
+        # 57% of shared synapses. Both are defensible; a frame that cannot say
+        # which one it holds is not.
+        out.attrs["connecto"]["transmitters"] = ds._transmitter_source
+    return out
 
 
-def _first_non_null(df: pd.DataFrame, columns) -> pd.Series:
-    """Coalesce several columns into one, in priority order.
+def _blank(s: pd.Series) -> pd.Series:
+    """Null or empty string. Sources disagree about which one means "no value"."""
+    return s.isna() | (s.astype("object") == "")
+
+
+def _coalesce(df: pd.DataFrame, columns) -> tuple[pd.Series, pd.Series]:
+    """Coalesce several columns in priority order; also say which one won.
 
     This is how `type` gets resolved: FlyWire looks at ``cell_type``, then
-    ``hemibrain_type``, then ``malecns_type``; maleCNS looks at ``type``, then
-    ``flywireType``... First non-null wins.
+    ``hemibrain_type``; maleCNS looks at ``type``, then ``flywireType``... First
+    non-null wins.
 
     Deliberately *mechanical*. connecto does not blacklist "bad" types the way
     cocoa's `_get_*_types` does - curation is analysis, and analysis lives
     upstream of here.
+
+    The second return value is the name of the column each value came from. For
+    most fields that is a curiosity; for `nt` it is the difference between a
+    measurement and a guess - see :func:`normalize_annotations`.
     """
     present = [c for c in columns if c in df.columns]
+    na = pd.Series(pd.NA, index=df.index, dtype="object")
     if not present:
-        return pd.Series(pd.NA, index=df.index, dtype="object")
+        return na, na.copy()
 
-    out = df[present[0]].copy()
-    for col in present[1:]:
-        out = out.where(out.notna() & (out != ""), df[col])
-    return out.replace("", pd.NA)
+    out, src = na.copy(), na.copy()
+    for col in present:
+        take = _blank(out) & ~_blank(df[col])
+        out = out.mask(take, df[col])
+        src = src.mask(take, col)
+    return out, src
+
+
+
 
 
 def normalize_annotations(
@@ -259,8 +342,19 @@ def normalize_annotations(
 ) -> pd.DataFrame:
     """Add canonical columns to an annotation frame; keep every raw column.
 
-    Canonical: ``id, type, side, class, nt, status, soma_x/y/z``. Derived by
-    column priority from ``spec.fields``, overridable per call.
+    Canonical: ``id, type, side, class, nt, nt_source, status, soma_x/y/z``.
+    Derived by column priority from ``spec.fields``, overridable per call.
+
+    ``nt`` gets a companion ``nt_source`` naming the column each value came from,
+    and it is the one field that does. The reason is that a dataset's transmitter
+    columns are not interchangeable opinions the way its type columns are - they
+    are different *kinds* of claim. FlyWire's `known_nt` is somebody's
+    immunostaining or RT-PCR; its `top_nt` is a CNN's argmax over a T-bar image.
+    maleCNS's `consensusNt` reconciles a prediction with published evidence;
+    `predictedNt` is the raw prediction. Coalescing those into one column and
+    saying nothing would let "this neuron is GABAergic" mean either "we measured
+    it" or "a model thinks so", with no way to tell which - and the two belong on
+    different sides of an argument.
     """
     fields = dict(ds.spec.fields) | dict(fields or {})
     df = raw.copy()
@@ -285,20 +379,27 @@ def normalize_annotations(
         # rather than inventing an all-null one. A missing column is honest; a
         # column of NaNs looks like "we have this field and it's empty".
         if not cols or not any(c in df.columns for c in cols):
-            return None
-        return _first_non_null(df, cols)
+            return None, None
+        return _coalesce(df, cols)
 
     for canon in ("type", "class", "nt", "status", "instance"):
-        derived = _derive(canon, fields.get(canon))
+        derived, source = _derive(canon, fields.get(canon))
         if derived is None:
             continue
         # Don't clobber a raw column of the same name that we're deriving *from*.
         if canon in df.columns and canon not in fields[canon]:
             df = df.rename(columns={canon: f"{canon}_raw"})
         df[canon] = derived
+        if canon == "nt":
+            # A source column of the same name would be a different thing entirely
+            # - FlyWire and BANC both carry `known_nt_source`, which is a citation,
+            # not a column name - so an incoming `nt_source` steps aside.
+            if "nt_source" in df.columns:
+                df = df.rename(columns={"nt_source": "nt_source_raw"})
+            df["nt_source"] = source
 
     side_cols = fields.get("side")
-    side = _derive("side", side_cols)
+    side, _ = _derive("side", side_cols)
     if side is not None:
         if ds.spec.side_map:
             side = side.map(
@@ -334,7 +435,10 @@ def normalize_annotations(
 
     df = _order(
         df,
-        ["id", "type", "side", "class", "nt", "status", "soma_x", "soma_y", "soma_z"],
+        [
+            "id", "type", "side", "class", "nt", "nt_source", "status",
+            "soma_x", "soma_y", "soma_z",
+        ],
     )
     out = stamp(
         df, ds, query="annotations", version=version, raw_columns=list(raw.columns)

@@ -166,8 +166,15 @@ hb.rois.hierarchy()     # networkx.DiGraph
 
 ## Transmitters
 
-FlyWire has per-synapse neurotransmitter predictions — **through the CAVE door**. The
-neuPrint mirror's `Synapse` nodes do not carry them, so ask the door that has them:
+Five doors have per-synapse neurotransmitter predictions: `flywire` (CAVE),
+`flywire-production`, `banc` (**both** backends), `malecns` and `manc`. The models differ
+in how many classes they have — FlyWire six, male-CNS seven, BANC eight, MANC three plus
+an explicit `unknown` — so `nt` can only ever say what that dataset's classifier was
+trained to say. FlyWire has plenty of histaminergic photoreceptors and its `nt` will
+never call one, because histamine is not one of its six classes.
+
+FlyWire's predictions are on the **CAVE door** only; the neuPrint mirror's `Synapse`
+nodes do not carry them, so ask the door that has them:
 
 ```python
 fw_cave = cn.FlyWire(backend="cave")
@@ -206,6 +213,45 @@ because that dataset does have transmitters, just not through that door:
 CapabilityError: FlyWire (FAFB) public release (neuprint) does not support
 nt_per_synapse. ... The cave backend does: cn.get_dataset("flywire", backend="cave").
 ```
+
+### Two doors, two model runs
+
+BANC is the one dataset with per-synapse transmitters through *both* backends, and they
+are **not the same predictions**:
+
+```python
+cn.BANC().connectivity.transmitters(720575941350526512)                 # neuPrint
+cn.BANC(backend="cave").connectivity.transmitters(720575941350526512)   # CAVE
+```
+
+```
+neuPrint:  serotonin  0.605
+CAVE    :  serotonin  0.520
+```
+
+The neuron-level call agrees — it is serotonergic either way — but the synapses
+underneath do not: on that neuron the two doors agree on only 57% of the synapses they
+share. CAVE serves `synapses_v2_nt_prediction_5`, a numbered model run; neuPrint's copy
+is a different run of the same eight-class model. Neither is wrong, and connecto will not
+pick for you. It records which one you have:
+
+```python
+syn = cn.BANC().connectivity.synapses(x, transmitters=True)
+syn.attrs["connecto"]["transmitters"]
+```
+
+```python
+{'source': 'neuprint.janelia.org/banc:v888',
+ 'classes': ['acetylcholine', 'dopamine', 'gaba', 'glutamate',
+             'histamine', 'octopamine', 'serotonin', 'tyramine']}
+```
+
+The two doors also carry different *shapes* of answer. neuPrint has the full probability
+vector, so you get an `nt_<transmitter>` column per class and can see the runner-up; CAVE
+has already taken the argmax, so it can only give you `nt` and `nt_confidence`. And
+CAVE's table only covers synapses of size ≥ 5, so some synapses come back with `nt` null
+— asking for transmitters never changes *which* synapses you get, only what is known
+about them.
 
 ## Caching
 
