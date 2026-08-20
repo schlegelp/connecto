@@ -1,10 +1,33 @@
-"""Annotations straight from the neuPrint :Neuron nodes."""
+"""Annotations straight from the neuPrint :Neuron nodes.
+
+Like :mod:`connecto.sources.cave_table`, the client here comes from the *spec's*
+neuPrint backend, not from whichever backend is currently answering queries -
+which is what makes ``FlyWire(backend="cave", annotations="neuprint")`` a sentence
+rather than a crash. Annotation source and query backend are a cross-product; this
+module is one axis of it and knows nothing about the other.
+"""
 
 from __future__ import annotations
 
 import pandas as pd
 
-__all__ = ["fetch_neuprint", "neuprint_freshness"]
+__all__ = ["fetch_neuprint", "neuprint_context", "neuprint_freshness"]
+
+
+def neuprint_context(ds):
+    """A neuPrint client for this dataset, whichever backend is answering queries.
+
+    Built through ``backends.build`` rather than by constructing a ``Client`` here,
+    so the borrowed door gets the same token resolution, version pinning, client
+    caching and error translation as a first-class one. Raises with a clear message
+    if the dataset has no neuPrint backend to borrow.
+    """
+    if ds.backend_kind == "neuprint":
+        return ds.client
+
+    from ..backends import build
+
+    return build(ds.spec, backend="neuprint").client
 
 
 def neuprint_freshness(source, ds) -> str | None:
@@ -16,7 +39,7 @@ def neuprint_freshness(source, ds) -> str | None:
     alone would miss. Free: ``meta`` is already on the client.
     """
     try:
-        return str(ds.client.meta.get("lastDatabaseEdit") or "") or None
+        return str(neuprint_context(ds).meta.get("lastDatabaseEdit") or "") or None
     except Exception:
         return None
 
@@ -25,20 +48,32 @@ def fetch_neuprint(source, ds, version) -> pd.DataFrame:
     from neuprint import NeuronCriteria as NC
     from neuprint import fetch_neurons
 
+    client = neuprint_context(ds)
+
     # fetch_neurons returns (neurons, roi_counts), but collapses to a single frame
     # when omit_rois=True.
-    result = fetch_neurons(NC(client=ds.client), client=ds.client, omit_rois=True)
+    result = fetch_neurons(NC(client=client), client=client, omit_rois=True)
     neurons = result[0] if isinstance(result, tuple) else result
     neurons = neurons.copy()
 
-    # Positions come back as [x, y, z] lists; split them so they survive the trip
-    # through feather and so `fields` can point at them.
+    # Positions come back as [x, y, z] lists - or, on this unfiltered query, as the
+    # raw Neo4j point: {"coordinates": [x, y, z], "crs": {...}, "type": "Point"}.
+    # Both shapes, because which one you get depends on how neuprint-python fetched
+    # it: `fetch_neurons` on a bodyId list converts them, on the whole dataset it
+    # does not. Reading only the list form left `soma_x/y/z` silently all-null on
+    # every neuPrint dataset - a column that says "we have somas and they're empty"
+    # while `ds.somas` returned them perfectly well.
+    def _coords(v):
+        if isinstance(v, dict):
+            v = v.get("coordinates")
+        return tuple(v) if isinstance(v, (list, tuple)) and len(v) == 3 else (None,) * 3
+
+    # Split them so they survive the trip through feather and so `fields` can point
+    # at them.
     for col in ("somaLocation", "tosomaLocation", "rootLocation"):
         if col in neurons.columns:
             base = col.replace("Location", "")
-            xyz = neurons[col].apply(
-                lambda v: v if isinstance(v, (list, tuple)) else (None, None, None)
-            )
+            xyz = neurons[col].apply(_coords)
             for i, axis in enumerate("xyz"):
                 neurons[f"{base}_{axis}"] = [
                     v[i] if v[i] is not None else pd.NA for v in xyz

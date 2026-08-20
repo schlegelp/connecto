@@ -145,10 +145,23 @@ and CAVE (`flywire_fafb_public`, versions `630` and `783`).
 > [Codex](https://codex.flywire.ai/) ·
 > [annotations](https://github.com/flyconnectome/flywire_annotations)
 
-- **Annotations** come from a published GitHub TSV, not from CAVE. This is load-bearing:
-  it means `ds.ids("DA1_lPN")` genuinely *cannot* compile to a CAVE server-side filter,
-  and must be resolved client-side against the cached annotation frame. 34 columns,
-  including `super_class`, `ito_lee_hemilineage`, `top_nt`. Same on either backend.
+- **Annotations** default to the neuPrint mirror, with the published GitHub TSV
+  (`annotations="public"`) and FlyTable (`"flytable"`) alongside. None of them is CAVE,
+  which is load-bearing: `ds.ids("DA1_lPN")` genuinely *cannot* compile to a CAVE
+  server-side filter, and must be resolved client-side against the cached annotation
+  frame. Whichever you pick works on either backend.
+
+  The two public sources agree on what they share — identical `DA1_lPN` sets, same
+  sides — and are very nearly the same table under different spelling: the mirror
+  carries both hemilineage systems, `nerve`, `synonyms` and `dimorphism` as camelCase,
+  and adds `statusLabel`, connectivity counts, the optic-column coordinates and the
+  per-neuron transmitter probabilities. It has `status` for 139,248 neurons against the
+  TSV's 658.
+
+  What it does **not** have is `known_nt` and its citation — the *measured* transmitter,
+  as opposed to the predicted one — which is why `nt` coverage is 119,597 here against
+  139,085 there. Also missing: `fbbt_id`, `nucleus_id`, `matching_notes` and the
+  annotation point `pos_x/y/z`. Reach for `annotations="public"` when you want those.
 - **Skeletons** come from a precomputed bucket, on *both* backends — the CAVE public
   stack has no L2 cache (and CAVE's skeleton service needs one), and the neuPrint mirror
   has no skeleton store at all. It is a plain HTTPS bucket, so both doors read it and
@@ -191,11 +204,21 @@ v888. Served by **both** neuPrint (`banc:v888`, the default) and CAVE (mat 888).
 > [Codex](https://codex.flywire.ai/banc) ·
 > [neuroglancer](https://ng.banc.community/view)
 
-- Annotations live in a CAVE table (`codex_annotations`) which is **long-format** —
-  1.84 M rows across 32 classification systems. connecto pivots it to wide and fetches it
-  in chunks, because it will not come down in one request.
-- The neuPrint-backed handle still reads its annotations from CAVE, because that is where
-  they are. Backend and annotation source are independent choices.
+- **Annotations default to the neuPrint mirror**, which needs no CAVE login and is the
+  better source for almost everything: 153,984 neurons with a `type` against codex's
+  118,446, and 154,830 with a transmitter against 115,601. `annotations="cave"` gets the
+  codex table, `"flytable"` the SeaTable one.
+- **Except `side`.** The mirror has one for 8,153 neurons; codex has one for all 158,250.
+  Rather than hand you a `side` column that is 95% null, the neuPrint source **declares
+  it absent**, so `ds.ids("PFNd", side="left")` refuses and names the source that can
+  answer instead of quietly returning 0 of 18. Use `BANC(annotations="cave")` when side
+  matters.
+- `codex_annotations` is **long-format** — 1.84 M rows across 32 classification systems.
+  connecto pivots it to wide and fetches it in chunks, because it will not come down in
+  one request.
+- Whichever source you pick works on either backend: annotation source and query backend
+  are independent choices, and the neuPrint source is reached through the spec's neuPrint
+  door even from `backend="cave"`.
 - **The neuPrint door is connectivity-only, for now.** `banc:v888` hosts no skeleton
   store, and BANC publishes no flat volume — its only segmentation is CAVE's graphene one
   — so skeletons, meshes, cutouts and neuroglancer scenes are all absent there and raise,

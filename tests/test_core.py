@@ -377,3 +377,49 @@ def test_a_raw_nt_source_column_does_not_get_clobbered():
     out = normalize_annotations(raw, _DS(), id_column="root_id")
     assert out["nt_source"].tolist() == ["top_nt"]
     assert out["nt_source_raw"].tolist() == ["Davis et al., 2020"]
+
+
+# ------------------------------------------------------- per-source annotations
+
+def test_a_source_can_declare_a_field_it_does_not_have():
+    """`fields` is a property of the dataset; the columns are a property of the table.
+
+    BANC's neuPrint mirror and its codex table both call the field `side`, and only
+    codex means it - 158,250 neurons against 8,153. Left alone, `ids(side="left")`
+    would answer from the 5%, which is a wrong number rather than a refusal.
+    """
+    raw = pd.DataFrame({"root_id": [1, 2, 3], "side": ["left", None, None]})
+
+    class _DS(_FakeDS):
+        class spec(_FakeSpec):
+            fields = {"side": ("side",)}
+
+    kept = normalize_annotations(raw, _DS(), id_column="root_id")
+    assert "side" in kept.columns  # the dataset says it has one, so it does
+
+    # ...and the source that doesn't overrides it to empty.
+    blanked = normalize_annotations(raw, _DS(), id_column="root_id", fields={"side": ()})
+    assert "side" not in blanked.columns, "declared-empty field must be absent"
+    # The raw column survives under `_raw` - nothing is dropped, it just stops
+    # pretending to be the canonical one.
+    assert blanked["side_raw"].tolist()[0] == "left"
+
+
+def test_annotation_sources_carry_their_own_field_overrides():
+    from connecto.core.spec import AnnotationSource
+
+    src = AnnotationSource("neuprint", "neuprint", fields={"side": ()})
+    assert src.fields == {"side": ()}
+    assert AnnotationSource("public", "github_tsv", "u").fields == {}
+
+
+def test_flywire_and_banc_default_to_their_neuprint_annotations():
+    for name in ("flywire", "banc"):
+        spec = co.get_spec(name)
+        assert spec.annotation_source("auto").name == "neuprint", name
+        # ...and the others are still reachable by name.
+        assert "neuprint" in [s.name for s in spec.annotation_sources]
+
+    # Production has no neuPrint mirror, so it must not have inherited the source.
+    prod = co.get_spec("flywire-production")
+    assert [s.name for s in prod.annotation_sources] == ["public", "flytable"]

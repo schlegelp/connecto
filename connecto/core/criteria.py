@@ -233,10 +233,12 @@ def resolve_criteria(crit: NeuronCriteria, ds, *, version=None) -> np.ndarray:
                 f"column with 'column:value'."
             )
         if col not in ann.columns:
-            near = _suggest(col, ann.columns)
+            elsewhere = _other_source(ds, col)
+            near = None if elsewhere else _suggest(col, ann.columns)
             raise ValueError(
                 f"{ds.label} annotations have no column {col!r}."
                 + (f" Did you mean {near!r}?" if near else "")
+                + elsewhere
             )
         mask &= _match(ann[col], value, use_regex)
 
@@ -244,6 +246,36 @@ def resolve_criteria(crit: NeuronCriteria, ds, *, version=None) -> np.ndarray:
     if ids is not None:
         found = np.intersect1d(found, ids)
     return found
+
+
+def _other_source(ds, col: str) -> str:
+    """"...the 'cave' source has one" - when another annotation source does.
+
+    The annotation-source counterpart of `dataset._elsewhere`, and it exists for the
+    same reason: a field can be missing from the *table you are reading* while the
+    dataset has it. BANC's neuPrint mirror declares no usable `side`; its codex
+    table has one for every neuron. Saying only "no column 'side'" sends the reader
+    off to find another dataset when what they need is another source.
+    """
+    spec = getattr(ds, "spec", None)
+    current = getattr(ds, "_annotation_source", None)
+    if spec is None or current is None:
+        return ""
+    # Only speak up when *this* source declared the field absent. A column that is
+    # missing for any other reason is a different problem, and guessing at it here
+    # would send people to a source that does not have it either.
+    if current.fields.get(col, True):
+        return ""
+    others = [
+        s.name for s in spec.annotation_sources
+        if s is not current and s.fields.get(col, True)
+    ]
+    if not others:
+        return ""
+    return (
+        f" The {others[0]!r} annotation source has one: "
+        f'cn.get_dataset("{spec.name}", annotations="{others[0]}").'
+    )
 
 
 def _suggest(name: str, options) -> str | None:

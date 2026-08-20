@@ -167,15 +167,21 @@ ann.columns.tolist()
 
 ```
 ['id', 'type', 'side', 'class', 'nt', 'nt_source', 'status', 'soma_x', 'soma_y',
- 'soma_z', 'supervoxel_id', 'pos_x', 'pos_y', 'pos_z', 'nucleus_id', 'flow',
- 'super_class', 'cell_class', 'cell_sub_class', 'supertype', 'cell_type',
- 'hemibrain_type', 'ito_lee_hemilineage', 'hartenstein_hemilineage', 'top_nt',
- 'top_nt_conf', 'known_nt', 'known_nt_source', 'nerve', 'vfb_id', 'fbbt_id',
- 'dimorphism', 'matching_notes', 'fru_dsx', 'synonyms']
+ 'soma_z', 'pre', 'post', 'downstream', 'upstream', 'statusLabel', 'areaNm',
+ 'connectivityTag', 'crossVersionConsistentName', 'dimorphism', 'flow', 'fruDsx',
+ 'hartensteinHemilineage', 'hemibrainType', 'itoLeeHemilineage', 'lengthNm',
+ 'location', 'nerve', 'ntAcetylcholineProb', 'ntDopamineProb', 'ntGabaProb',
+ 'ntGlutamateProb', 'ntOctopamineProb', 'ntSerotoninProb', 'opticColumnId',
+ 'opticColumnP', 'opticColumnQ', 'opticColumnX', 'opticColumnY', 'outlier',
+ 'predictedNt', 'predictedNtProb', 'sizeNm', 'subclass', 'superclass',
+ 'supertype', 'supervoxelId', 'synonyms', 'synweight', 'vfbId']
 ```
 
 The first ten are **canonical** — the same names, same dtypes, same units on every
-dataset. The remaining twenty-five are FlyWire's own, passed through untouched.
+dataset. The remaining thirty-nine are FlyWire's own, passed through untouched. Pick a
+different source and the tail changes completely while the first ten do not:
+`fw.annotations.get("DA1_lPN", source="public")` hands back the published TSV's
+snake_case columns instead.
 
 ### `nt` is coalesced too — and says so
 
@@ -187,25 +193,36 @@ fw.annotations.get("DA1_lPN")[["id", "nt", "nt_source"]]
 ```
 
 ```
-                   id             nt nt_source
-0  720575940604407468  acetylcholine  known_nt
-1  720575940623543881  acetylcholine  known_nt
+                   id             nt    nt_source
+0  720575940604407468  acetylcholine  predictedNt
+1  720575940623543881  acetylcholine  predictedNt
 ```
 
 The reason is that a dataset's transmitter columns are not interchangeable opinions the
-way its type columns are — they are different *kinds* of claim. FlyWire's `known_nt` is
-somebody's immunostaining or RT-PCR; `top_nt` is a CNN's argmax over a T-bar image. Of
-139,244 neurons, 87,832 have the former and another 51,242 only the latter. Without
-`nt_source`, "this neuron is GABAergic" would mean either "we measured it" or "a model
-thinks so", with no way to tell which — and the two belong on different sides of an
-argument.
+way its type columns are — they are different *kinds* of claim. A prediction is a CNN's
+argmax over a T-bar image; a *measurement* is somebody's immunostaining or RT-PCR. The
+default neuPrint source has only the first, which is what `nt_source` is telling you
+above. FlyWire's published TSV has both:
+
+```python
+ann = fw.annotations.get(source="public")
+ann["nt_source"].value_counts()
+```
+
+```
+known_nt    87837       # measured
+top_nt      51248       # predicted
+```
 
 So filtering on evidence is a column comparison:
 
 ```python
-ann = fw.annotations.get()
 measured = ann[ann["nt_source"] == "known_nt"]
 ```
+
+Without `nt_source`, "this neuron is GABAergic" would mean either "we measured it" or "a
+model thinks so", with no way to tell which — and the two belong on different sides of
+an argument.
 
 It is there even when a dataset has only one transmitter column, because *which* one it
 is still matters: aedes has `neurotransmitter_verified` and no predictions at all, and

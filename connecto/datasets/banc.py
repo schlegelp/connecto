@@ -128,6 +128,24 @@ BANC_SPEC = DatasetSpec(
         ),
     ),
     annotation_sources=(
+        # neuPrint first, and therefore the default. Its `bodyId` *is* the CAVE root
+        # ID at materialization 888, so it joins onto everything either backend
+        # returns, and unlike `codex_annotations` it needs no CAVE login - which
+        # matters most on the neuPrint door, where annotations were the one thing
+        # still reaching across to CAVE.
+        #
+        # It is also much the better source for transmitters: 153,986 bodies carry
+        # `neurotransmitterPredicted` here against codex's 82,286, which is the
+        # FlyTable figure without the FlyTable token.
+        #
+        # The exception is `side`, and it is a big one - see `fields` below.
+        AnnotationSource(
+            "neuprint", "neuprint", id_column="bodyId",
+            # 8,153 of 175,420 bodies carry a `side` here, against all 158,250 in
+            # codex. Declared empty rather than left to look like a side column
+            # that happens to be mostly blank - see `AnnotationSource.fields`.
+            fields={"side": ()},
+        ),
         # codex_annotations is long-format: one row per (root_id, key, value),
         # with 32 distinct keys where other datasets would have 32 columns. It also
         # reliably fails to download in one request, hence chunked=True.
@@ -149,12 +167,30 @@ BANC_SPEC = DatasetSpec(
             instance="seatable", id_column="root_888", public=False,
         ),
     ),
+    # Every spelling any source uses, in priority order. The sources are
+    # alternatives, never merged, so only one frame's columns are present at a time
+    # and the extra names cost nothing. snake_case is codex's and FlyTable's,
+    # camelCase neuPrint's.
     fields={
-        "type": ("cell_type", "fafb_783_cell_type", "malecns_09_cell_type", "manc_121_cell_type"),
+        "type": (
+            "cell_type", "fafb_783_cell_type", "malecns_09_cell_type",
+            "manc_121_cell_type", "type", "fafbCellType", "malecnsCellType",
+        ),
+        # Both sources spell it `side`, so one entry covers both - but they are not
+        # equally populated, and the default one is not usable: see the `fields`
+        # override on the neuPrint source above, which declares it absent so that
+        # `ids(side=...)` refuses instead of answering from 5% of the dataset.
         "side": ("side",),
-        "class": ("super_class", "cell_class"),
-        "nt": ("neurotransmitter_verified", "neurotransmitter_predicted"),
+        "class": ("super_class", "cell_class", "superclass", "class"),
+        "nt": (
+            "neurotransmitter_verified", "neurotransmitter_predicted",
+            "neurotransmitterVerified", "neurotransmitterPredicted",
+        ),
         "status": ("status",),
+        # Only the neuPrint source has these (codex carries no soma point at all);
+        # naming them makes the column canonical - ordered, float32, and put through
+        # the unit conversion - rather than raw passthrough that happens to be right.
+        "soma": ("soma_x", "soma_y", "soma_z"),
     },
     side_map={"left": "left", "right": "right", "center": "center"},
     voxel_size=(4, 4, 45),

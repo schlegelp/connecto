@@ -112,8 +112,12 @@ class Annotations(_Namespace):
         if raw:
             return table.copy()
 
+        # spec.fields, then this source's overrides, then the caller's. The caller
+        # always wins; a source only speaks for the table it is.
         ann = schemas.normalize_annotations(
-            table, ds, id_column=src.id_column, fields=fields, version=v, units=units
+            table, ds, id_column=src.id_column,
+            fields=dict(src.fields) | dict(fields or {}),
+            version=v, units=units,
         )
 
         if x is not None or filters:

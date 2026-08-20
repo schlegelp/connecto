@@ -49,13 +49,18 @@ ANNOTATIONS_URL = (
     "main/supplemental_files/Supplemental_file1_neuron_annotations.tsv"
 )
 
+# Each canonical field lists every spelling any of the sources uses, in priority
+# order. The sources are alternatives, never merged, so only one frame's columns are
+# ever present at once and the extra names cost nothing - `_coalesce` skips what is
+# not there. Sorted source-by-source rather than interleaved: the snake_case names
+# are the GitHub TSV's and FlyTable's, the camelCase ones neuPrint's.
 _FIELDS = {
-    "type": ("cell_type", "hemibrain_type"),
-    "side": ("side",),
-    "class": ("super_class", "cell_class"),
-    "nt": ("known_nt", "top_nt"),
+    "type": ("cell_type", "hemibrain_type", "type", "hemibrainType"),
+    "side": ("side",),  # both spell it `side`, with the same left/right/center values
+    "class": ("super_class", "cell_class", "superclass", "class"),
+    "nt": ("known_nt", "top_nt", "predictedNt"),
     "status": ("status",),
-    "soma": ("soma_x", "soma_y", "soma_z"),
+    "soma": ("soma_x", "soma_y", "soma_z"),  # neuPrint's somaLocation is split to these
 }
 
 # FlyWire already speaks left/right/center. "na" is not a side.
@@ -87,7 +92,19 @@ _NT_COLUMNS = {
 # is live and keys on `root_id` instead.
 _FLYTABLE = "main.info,optic_lobes.optic"
 
+# neuPrint first, and therefore the default. Its `bodyId` *is* the CAVE root ID at
+# materialization 783, so it joins onto everything either backend returns, and it
+# needs no CAVE login and no SeaTable token. Reached through the spec's neuPrint
+# backend whichever door is answering queries, so `backend="cave"` keeps it.
+#
+# It is very nearly the same table under different spelling - the mirror carries the
+# hemilineages, `nerve`, `synonyms` and `dimorphism` as camelCase, and adds `statusLabel`,
+# connectivity counts and the optic-column coordinates. What it does *not* have is
+# `known_nt` and its citation - the measured transmitter, as opposed to the predicted
+# one - plus `fbbt_id`, `nucleus_id`, `matching_notes` and the annotation point
+# `pos_x/y/z`. All one argument away: `FlyWire(annotations="public")`.
 _ANNOTATIONS = (
+    AnnotationSource("neuprint", "neuprint", id_column="bodyId"),
     AnnotationSource("public", "github_tsv", ANNOTATIONS_URL, id_column="root_id"),
     AnnotationSource("flytable", "seatable", _FLYTABLE, id_column="root_783", public=False),
 )
