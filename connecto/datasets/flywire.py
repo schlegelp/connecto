@@ -49,16 +49,16 @@ ANNOTATIONS_URL = (
     "main/supplemental_files/Supplemental_file1_neuron_annotations.tsv"
 )
 
-# Each canonical field lists every spelling any of the sources uses, in priority
-# order. The sources are alternatives, never merged, so only one frame's columns are
-# ever present at once and the extra names cost nothing - `_coalesce` skips what is
-# not there. Sorted source-by-source rather than interleaved: the snake_case names
-# are the GitHub TSV's and FlyTable's, the camelCase ones neuPrint's.
+# The snake_case spellings, which are the GitHub TSV's and FlyTable's. neuPrint
+# spells the same concepts in camelCase and says so on its own AnnotationSource
+# rather than here - a column name is a property of the table, not of the dataset.
+# `side`, `status` and the soma point are named the same by all three, so they need
+# no per-source entry at all.
 _FIELDS = {
-    "type": ("cell_type", "hemibrain_type", "type", "hemibrainType"),
-    "side": ("side",),  # both spell it `side`, with the same left/right/center values
-    "class": ("super_class", "cell_class", "superclass", "class"),
-    "nt": ("known_nt", "top_nt", "predictedNt"),
+    "type": ("cell_type", "hemibrain_type"),
+    "side": ("side",),
+    "class": ("super_class", "cell_class"),
+    "nt": ("known_nt", "top_nt"),
     "status": ("status",),
     "soma": ("soma_x", "soma_y", "soma_z"),  # neuPrint's somaLocation is split to these
 }
@@ -104,7 +104,18 @@ _FLYTABLE = "main.info,optic_lobes.optic"
 # one - plus `fbbt_id`, `nucleus_id`, `matching_notes` and the annotation point
 # `pos_x/y/z`. All one argument away: `FlyWire(annotations="public")`.
 _ANNOTATIONS = (
-    AnnotationSource("neuprint", "neuprint", id_column="bodyId"),
+    AnnotationSource(
+        "neuprint", "neuprint", id_column="bodyId",
+        # Same concepts, neuPrint's spelling. Declared here rather than appended to
+        # `_FIELDS` so the priority order within each source is exactly the order
+        # that source intends - a dataset-wide union would only rank correctly for
+        # as long as no two sources share a column name.
+        fields={
+            "type": ("type", "hemibrainType"),
+            "class": ("superclass", "class"),
+            "nt": ("predictedNt",),
+        },
+    ),
     AnnotationSource("public", "github_tsv", ANNOTATIONS_URL, id_column="root_id"),
     AnnotationSource("flytable", "seatable", _FLYTABLE, id_column="root_783", public=False),
 )

@@ -112,11 +112,9 @@ class Annotations(_Namespace):
         if raw:
             return table.copy()
 
-        # spec.fields, then this source's overrides, then the caller's. The caller
-        # always wins; a source only speaks for the table it is.
         ann = schemas.normalize_annotations(
             table, ds, id_column=src.id_column,
-            fields=dict(src.fields) | dict(fields or {}),
+            fields=ds._annotation_fields(src, fields),
             version=v, units=units,
         )
 
@@ -217,7 +215,13 @@ class Annotations(_Namespace):
 
     @property
     def fields(self) -> dict:
-        return dict(self._ds.spec.fields)
+        """The field priorities in force for the source this handle will read.
+
+        Not ``spec.fields``: a source may rename or disclaim a field (BANC's
+        neuPrint mirror has no usable `side`), so the dataset's own list would
+        describe a frame `get()` does not return.
+        """
+        return self._ds._annotation_fields(self._ds._annotation_source)
 
 
 class Connectivity(_Namespace):

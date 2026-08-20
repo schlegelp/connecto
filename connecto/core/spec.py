@@ -386,19 +386,15 @@ class AnnotationSource:
     # Field priorities that apply only when *this* source is the one being read,
     # overlaid on `DatasetSpec.fields`.
     #
-    # Needed because `fields` is a property of the dataset while the columns are a
-    # property of the table, and for a dataset with several sources those are not
-    # the same thing. Listing every source's spellings in one priority list covers
-    # most of it - the sources are alternatives, so only one frame's columns are
-    # ever present - but not the case where two sources have a column of the *same
-    # name* and only one of them means it. BANC is exactly that: both its neuPrint
-    # mirror and its codex table call the field `side`, and codex has one for all
-    # 158,250 neurons where the mirror has 8,153.
+    # Needed because a column name is a property of the *table*, while `fields` is a
+    # property of the dataset - and a dataset with two sources has two tables. They
+    # may spell one concept differently (FlyWire's TSV says `cell_type`, its neuPrint
+    # mirror says `type`), or share a name for a field only one of them really has.
     #
-    # An empty tuple is the useful value: "this source does not have this field",
-    # which makes the canonical column *absent* rather than present and 95% null.
-    # `ds.ids("PFNd", side="left")` then says it cannot answer instead of answering
-    # 0 - the difference between a refusal and a wrong number.
+    # An empty tuple is the second case: "this source does not have this field",
+    # which makes the canonical column *absent* rather than present and mostly null,
+    # so a query on it refuses instead of returning a wrong number. BANC's `side` is
+    # the worked example - see `connecto/datasets/banc.py`.
     fields: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     # Some tables are long-format: one row per (id, key, value), rather than one

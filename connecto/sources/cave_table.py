@@ -25,21 +25,17 @@ CHUNK_SIZE = 100_000
 
 
 def cave_context(ds):
-    """(CAVEclient, version-kwargs) for this dataset's CAVE backend."""
-    if ds.backend_kind == "cave":
-        return ds.client, ds._mat_kwargs(ds.version)
+    """(CAVEclient, version-kwargs) for this dataset's CAVE backend.
 
-    # A non-CAVE backend: borrow the CAVE datastack the spec declares.
-    from caveclient import CAVEclient
+    Note this borrows a whole CAVE *handle*, not just a client, so the version it
+    reads at is resolved by the same rules a first-class CAVE handle uses - rather
+    than the "newest materialization" this used to guess at, which was a third
+    spelling of a decision `CAVEDataset._resolve_version` already owns.
+    """
+    from . import borrow
 
-    from ..auth import get_token
-
-    backend = ds.spec.backend("cave")  # raises with a clear message if there isn't one
-    client = CAVEclient(backend.source, auth_token=get_token("cave").token)
-    version = backend.default_version
-    if version in (None, "latest"):
-        version = max(client.materialize.get_versions())
-    return client, {"materialization_version": int(version)}
+    cave = borrow(ds, "cave")
+    return cave.client, cave._mat_kwargs(cave.version)
 
 
 def fetch_cave_table(source, ds, version) -> pd.DataFrame:

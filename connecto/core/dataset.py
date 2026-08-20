@@ -175,6 +175,11 @@ class Dataset(ABC):
         if fields:
             spec = spec.evolve(fields=dict(spec.fields) | dict(fields))
 
+        # Kept as well as folded into the spec above, because an annotation *source*
+        # can override field priorities too and this layer has to outrank it - see
+        # `_annotation_fields`. Once merged into `spec.fields` they are no longer
+        # distinguishable from the dataset's own.
+        self._field_overrides = dict(fields or {})
         self.spec = spec
         self._backend = spec.backend(backend)
         self._annotation_source = spec.annotation_source(annotations)
@@ -495,6 +500,29 @@ class Dataset(ABC):
     # The backend's usual convention. A *server* may differ - see
     # `BackendSpec.position_units` - so nobody reads this directly.
     _default_position_units: str = "voxel"
+
+    def _annotation_fields(self, source=None, overrides=None) -> dict:
+        """Canonical field -> candidate columns, for one source and one call.
+
+        Four layers, and the order is the whole point:
+
+        1. ``spec.fields`` - what the *dataset* calls things.
+        2. ``source.fields`` - what *this table* calls them, or, empty, that it has
+           not got one. Only the table knows this, and two sources for one dataset
+           need not agree.
+        3. the handle's ``fields=`` - the escape hatch.
+        4. this call's ``fields=`` - the last word.
+
+        3 and 4 outrank the source deliberately. ``resolve_criteria`` tells people
+        to pass ``fields={...}`` by name when a dataset has no column they want, and
+        a source that declared a field absent must not silently win that argument.
+        """
+        return (
+            dict(self.spec.fields)
+            | (dict(source.fields) if source is not None else {})
+            | dict(self._field_overrides)
+            | dict(overrides or {})
+        )
 
     @property
     def _raw_position_units(self) -> str:

@@ -405,21 +405,61 @@ def test_a_source_can_declare_a_field_it_does_not_have():
     assert blanked["side_raw"].tolist()[0] == "left"
 
 
-def test_annotation_sources_carry_their_own_field_overrides():
-    from connecto.core.spec import AnnotationSource
+def test_the_fields_escape_hatch_outranks_a_source_override():
+    """A source may disclaim a field; the user may insist. The user wins.
 
-    src = AnnotationSource("neuprint", "neuprint", fields={"side": ()})
-    assert src.fields == {"side": ()}
-    assert AnnotationSource("public", "github_tsv", "u").fields == {}
+    `resolve_criteria` tells people to pass `fields={...}` by name when a dataset
+    has no column they want, so a source silently beating that argument would make
+    the advice wrong.
+    """
+    banc = co.get_dataset("banc", annotations="neuprint")
+    assert banc.annotations.fields["side"] == ()  # the mirror has no usable side
+
+    insisted = co.get_dataset("banc", annotations="neuprint", fields={"side": ("side",)})
+    assert insisted.annotations.fields["side"] == ("side",)
+
+    # ...and the sibling source keeps its own answer, untouched by either.
+    assert co.get_dataset("banc", annotations="cave").annotations.fields["side"] == ("side",)
+
+
+def test_annotations_fields_reports_the_source_it_will_actually_read():
+    """Not `spec.fields`. FlyWire's two sources spell every field differently, so the
+    dataset's own list describes a frame `get()` does not return."""
+    neuprint = co.get_dataset("flywire", annotations="neuprint").annotations.fields
+    public = co.get_dataset("flywire", annotations="public").annotations.fields
+
+    assert neuprint["type"] == ("type", "hemibrainType")
+    assert public["type"] == ("cell_type", "hemibrain_type")
+    # Fields both tables agree on need no override and must survive unchanged.
+    assert neuprint["side"] == public["side"] == ("side",)
 
 
 def test_flywire_and_banc_default_to_their_neuprint_annotations():
     for name in ("flywire", "banc"):
         spec = co.get_spec(name)
         assert spec.annotation_source("auto").name == "neuprint", name
-        # ...and the others are still reachable by name.
-        assert "neuprint" in [s.name for s in spec.annotation_sources]
+        # ...and the ones it displaced are still reachable by name.
+        assert {"flytable"} < {s.name for s in spec.annotation_sources}, name
 
     # Production has no neuPrint mirror, so it must not have inherited the source.
     prod = co.get_spec("flywire-production")
     assert [s.name for s in prod.annotation_sources] == ["public", "flytable"]
+
+
+def test_a_field_a_source_disclaims_points_at_the_source_that_has_it():
+    """The annotation-source counterpart of "the cave backend does".
+
+    A refusal that names the thing which *would* have worked is the difference
+    between a dead end and a next step - and `side` is missing from BANC's default
+    source for a reason that has a remedy one argument away.
+    """
+    from connecto.core.criteria import _other_source
+
+    banc = co.get_dataset("banc", annotations="neuprint")
+    hint = _other_source(banc, "side")
+    assert "'cave'" in hint and 'annotations="cave"' in hint
+
+    # Silent about fields it has not disclaimed - a column missing for some other
+    # reason is a different problem, and pointing anywhere would be a guess.
+    assert _other_source(banc, "type") == ""
+    assert _other_source(co.get_dataset("banc", annotations="cave"), "side") == ""

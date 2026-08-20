@@ -368,20 +368,24 @@ def normalize_annotations(
             f"(got {list(raw.columns)[:12]}...)."
         )
 
-    # A source may declare a field explicitly empty - "this table does not have
-    # one" (see `AnnotationSource.fields`). A raw column of the same name is then
-    # not it, and must not be mistaken for it: leaving BANC's neuPrint `side` in
-    # place would let `ids(side="left")` quietly answer from the 5% of neurons that
-    # have one. Moved aside, so the canonical column is absent and the query says so.
-    for canon, cols in fields.items():
-        if not cols and canon in df.columns:
-            df = df.rename(columns={canon: f"{canon}_raw"})
-
     # Pull values out of columns that hold them implicitly - e.g. hemibrain's
     # side, which lives as a suffix on the instance name ("DA1_lPN_R").
     for new_col, (src_col, pattern) in ds.spec.derive.items():
         if src_col in df.columns and new_col not in df.columns:
             df[new_col] = df[src_col].astype("string").str.extract(pattern, expand=False)
+
+    # A source may declare a field explicitly empty - "this table does not have
+    # one" (see `AnnotationSource.fields`). A raw column of the same name is then
+    # not it, and must not be mistaken for it: leaving BANC's neuPrint `side` in
+    # place would let `ids(side="left")` quietly answer from the 5% of neurons that
+    # have one. Moved aside, so the canonical column is absent and the query says so.
+    #
+    # After `derive`, not before: `derive` fills a column only when it is missing,
+    # so suppressing one first would invite it to be re-created from a regex two
+    # lines later - reopening the hole this closes.
+    for canon, cols in fields.items():
+        if not cols and canon in df.columns:
+            df = df.rename(columns={canon: f"{canon}_raw"})
 
     def _derive(canon, cols):
         # If none of the source columns exist, leave the canonical column *out*

@@ -233,12 +233,11 @@ def resolve_criteria(crit: NeuronCriteria, ds, *, version=None) -> np.ndarray:
                 f"column with 'column:value'."
             )
         if col not in ann.columns:
-            elsewhere = _other_source(ds, col)
-            near = None if elsewhere else _suggest(col, ann.columns)
+            hint = _other_source(ds, col)
+            if not hint and (near := _suggest(col, ann.columns)):
+                hint = f" Did you mean {near!r}?"
             raise ValueError(
-                f"{ds.label} annotations have no column {col!r}."
-                + (f" Did you mean {near!r}?" if near else "")
-                + elsewhere
+                f"{ds.label} annotations have no column {col!r}.{hint}"
             )
         mask &= _match(ann[col], value, use_regex)
 
@@ -257,24 +256,27 @@ def _other_source(ds, col: str) -> str:
     table has one for every neuron. Saying only "no column 'side'" sends the reader
     off to find another dataset when what they need is another source.
     """
-    spec = getattr(ds, "spec", None)
     current = getattr(ds, "_annotation_source", None)
-    if spec is None or current is None:
-        return ""
-    # Only speak up when *this* source declared the field absent. A column that is
-    # missing for any other reason is a different problem, and guessing at it here
-    # would send people to a source that does not have it either.
-    if current.fields.get(col, True):
+    # Only speak up when *this* source declared the field absent. A column missing
+    # for any other reason is a different problem, and guessing here would send
+    # people to a source that has not got it either. That test also excludes the
+    # current source from the list below, so it needs no separate identity check.
+    if current is None or current.fields.get(col, True):
         return ""
     others = [
-        s.name for s in spec.annotation_sources
-        if s is not current and s.fields.get(col, True)
+        s.name for s in ds.spec.annotation_sources if s.fields.get(col, True)
     ]
     if not others:
         return ""
+    # Carry the backend through when it is not the default one. Annotation source
+    # and backend are independent axes, and a suggestion that silently resets the
+    # other one sends a `backend="cave"` handle to neuPrint to fix its `side`.
+    args = f'annotations="{others[0]}"'
+    if ds.backend_kind != ds.spec.backends[0].kind:
+        args = f'backend="{ds.backend_kind}", {args}'
     return (
         f" The {others[0]!r} annotation source has one: "
-        f'cn.get_dataset("{spec.name}", annotations="{others[0]}").'
+        f'cn.get_dataset("{ds.spec.name}", {args}).'
     )
 
 

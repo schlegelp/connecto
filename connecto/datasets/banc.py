@@ -137,14 +137,20 @@ BANC_SPEC = DatasetSpec(
         # It is also much the better source for transmitters: 153,986 bodies carry
         # `neurotransmitterPredicted` here against codex's 82,286, which is the
         # FlyTable figure without the FlyTable token.
-        #
-        # The exception is `side`, and it is a big one - see `fields` below.
         AnnotationSource(
             "neuprint", "neuprint", id_column="bodyId",
-            # 8,153 of 175,420 bodies carry a `side` here, against all 158,250 in
-            # codex. Declared empty rather than left to look like a side column
-            # that happens to be mostly blank - see `AnnotationSource.fields`.
-            fields={"side": ()},
+            fields={
+                # Same concepts as `fields` below, neuPrint's spelling.
+                "type": ("type", "fafbCellType", "malecnsCellType"),
+                "class": ("superclass", "class"),
+                "nt": ("neurotransmitterVerified", "neurotransmitterPredicted"),
+                # ...and one it has not got. 8,153 of 175,420 bodies carry a `side`
+                # here, against all 158,250 in codex. Empty rather than left to look
+                # like a side column that happens to be mostly blank: `ids(side=...)`
+                # then refuses and names the source that can answer, instead of
+                # returning 0 of 18. See `AnnotationSource.fields`.
+                "side": (),
+            },
         ),
         # codex_annotations is long-format: one row per (root_id, key, value),
         # with 32 distinct keys where other datasets would have 32 columns. It also
@@ -167,25 +173,13 @@ BANC_SPEC = DatasetSpec(
             instance="seatable", id_column="root_888", public=False,
         ),
     ),
-    # Every spelling any source uses, in priority order. The sources are
-    # alternatives, never merged, so only one frame's columns are present at a time
-    # and the extra names cost nothing. snake_case is codex's and FlyTable's,
-    # camelCase neuPrint's.
+    # The snake_case spellings, which are codex's and FlyTable's. neuPrint spells
+    # the same concepts in camelCase and says so on its own AnnotationSource above.
     fields={
-        "type": (
-            "cell_type", "fafb_783_cell_type", "malecns_09_cell_type",
-            "manc_121_cell_type", "type", "fafbCellType", "malecnsCellType",
-        ),
-        # Both sources spell it `side`, so one entry covers both - but they are not
-        # equally populated, and the default one is not usable: see the `fields`
-        # override on the neuPrint source above, which declares it absent so that
-        # `ids(side=...)` refuses instead of answering from 5% of the dataset.
+        "type": ("cell_type", "fafb_783_cell_type", "malecns_09_cell_type", "manc_121_cell_type"),
         "side": ("side",),
-        "class": ("super_class", "cell_class", "superclass", "class"),
-        "nt": (
-            "neurotransmitter_verified", "neurotransmitter_predicted",
-            "neurotransmitterVerified", "neurotransmitterPredicted",
-        ),
+        "class": ("super_class", "cell_class"),
+        "nt": ("neurotransmitter_verified", "neurotransmitter_predicted"),
         "status": ("status",),
         # Only the neuPrint source has these (codex carries no soma point at all);
         # naming them makes the column canonical - ordered, float32, and put through

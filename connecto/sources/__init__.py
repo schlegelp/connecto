@@ -17,7 +17,29 @@ import pandas as pd
 
 from ..core.spec import MULTI_SEP, AnnotationSource
 
-__all__ = ["fetch", "freshness"]
+__all__ = ["borrow", "fetch", "freshness"]
+
+
+def borrow(ds, kind: str):
+    """This dataset seen through another of its backends.
+
+    The cross-product in the module docstring only works if a source can reach its
+    own door regardless of which one is answering queries: BANC's annotations live
+    in CAVE and on neuPrint, and `BANC(backend="neuprint", annotations="cave")` has
+    to be a sentence. Returns `ds` itself when it is already on that backend.
+
+    Goes through `backends.build` so a borrowed door is a real one - same token
+    resolution, same version rules, same cached client, same error translation as
+    the door you came in by. Building a Dataset does no I/O; the client underneath
+    is process-cached, so this is cheap enough to call per fetch.
+    """
+    if ds.backend_kind == kind:
+        return ds
+
+    from ..backends import build
+
+    # Raises with a clear message if the spec declares no such backend.
+    return build(ds.spec, backend=kind)
 
 
 def freshness(source: AnnotationSource, ds, version) -> str | None:
