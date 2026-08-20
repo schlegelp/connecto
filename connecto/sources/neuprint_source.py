@@ -75,7 +75,7 @@ def fetch_neuprint(source, ds, version) -> pd.DataFrame:
     # object column can hold one, and a generator stops at the first hit rather
     # than building a boolean Series per column - which matters now that two 175k-
     # row datasets read this by default (0.9s -> 0.3s on a 175k x 50 frame).
-    for col in neurons.columns[neurons.dtypes == object]:
+    for col in neurons.columns[neurons.dtypes == "object"]:
         if any(isinstance(v, (list, dict)) for v in neurons[col].to_numpy()):
             neurons[col] = neurons[col].map(
                 lambda v: ", ".join(map(str, v)) if isinstance(v, list) else str(v)
