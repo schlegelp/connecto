@@ -4,6 +4,8 @@ Unified Interface for Querying Connectomes.
 
 **📖 [Documentation](https://schlegelp.github.io/connecto/)** — tutorials, guides and API reference.
 
+**📝 [Changelog](https://schlegelp.github.io/connecto/changelog/)** — what changed in each release.
+
 ![logo](docs/_static/logo.png)
 
 Connectomic datasets each speak their own dialect. CAVE has materialization

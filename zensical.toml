@@ -57,6 +57,7 @@ nav = [
     { "Registry and specs" = "reference/registry.md" },
     { "Auth and cache" = "reference/auth.md" },
   ] },
+  { "Changelog" = "changelog.md" },
 ]
 
 # ----------------------------------------------------------------------------
