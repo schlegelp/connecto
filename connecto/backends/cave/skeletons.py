@@ -19,29 +19,30 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
 
-from ...core.parallel import DEFAULT_SKELETON_WORKERS, map_ordered
+from ...core.parallel import DEFAULT_NEURON_WORKERS, map_ordered
 from ...core.spec import Cap
 from ...core.volume import precomputed_skeleton
 from ...exceptions import CapabilityError, ConnectoError
 
 logger = logging.getLogger("connecto")
 
-__all__ = ["fetch_skeletons", "l2_skeleton", "l2_info"]
+__all__ = ["L2_SKELETON_ATTRIBUTES", "fetch_skeletons", "l2_info", "l2_skeleton"]
 
 
 def fetch_skeletons(
-    ds, ids, version, *, progress: bool = True, max_workers: int = DEFAULT_SKELETON_WORKERS
+    ds, ids, version, *, progress: bool = True, max_workers: int = DEFAULT_NEURON_WORKERS
 ):
     """Yield ``(root_id, node_table)`` for each neuron, in the order asked for.
 
     Threaded, because every route here is one request per neuron and nothing else: a
     bucket read, a call to the skeleton service, or the three CAVE calls an L2
     skeleton needs. Serially that is a round trip of dead time per neuron; see
-    :data:`~connecto.core.parallel.DEFAULT_SKELETON_WORKERS` for what that costs.
+    :data:`~connecto.core.parallel.DEFAULT_NEURON_WORKERS` for what that costs.
 
     The CAVE client is shared across the workers rather than copied per thread.
     caveclient fans its own queries out over a ``ThreadPoolExecutor`` holding one
@@ -237,7 +238,11 @@ def _edges_to_parents(n_nodes: int, edges: np.ndarray, root_node: int = 0) -> np
     return parent
 
 
-def l2_info(ds, root: int) -> pd.DataFrame:
+#: What a skeleton needs off each chunk: where it is, and how thick it is.
+L2_SKELETON_ATTRIBUTES = ("rep_coord_nm", "size_nm3", "area_nm2")
+
+
+def l2_info(ds, root: int, *, attributes=L2_SKELETON_ATTRIBUTES) -> pd.DataFrame:
     """Level-2 chunk attributes for one neuron.
 
     Note ``split_columns=True`` (caveclient's default): ``rep_coord_nm`` comes back
@@ -245,18 +250,24 @@ def l2_info(ds, root: int) -> pd.DataFrame:
     """
     l2_ids = ds.client.chunkedgraph.get_leaves(root, stop_layer=2)
     return ds.client.l2cache.get_l2data_table(
-        l2_ids.tolist(),
-        attributes=["rep_coord_nm", "size_nm3", "area_nm2"],
-        split_columns=True,
+        l2_ids.tolist(), attributes=list(attributes), split_columns=True
     )
 
 
 def l2_skeleton(ds, root: int) -> pd.DataFrame:
-    """Build a skeleton from the L2 chunk graph. Positions are already in nm."""
+    """Build a skeleton from the L2 chunk graph. Positions are already in nm.
+
+    The chunk graph and the chunk attributes are two independent requests, so they
+    go out together: the graph tells us how the chunks connect, the attributes where
+    they are, and neither needs the other's answer. Worth ~1.4x on one neuron, which
+    is the case with no other parallelism to draw on - a single ``l2.skeleton(x)``.
+    """
     import networkx as nx
 
-    edges = ds.client.chunkedgraph.level2_chunk_graph(root)
-    info = l2_info(ds, root)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending = pool.submit(l2_info, ds, root)
+        edges = ds.client.chunkedgraph.level2_chunk_graph(root)
+        info = pending.result()
 
     xyz_cols = ["rep_coord_nm_x", "rep_coord_nm_y", "rep_coord_nm_z"]
     missing = [c for c in xyz_cols if c not in info.columns]

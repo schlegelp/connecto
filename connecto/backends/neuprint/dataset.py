@@ -27,7 +27,7 @@ from ...core.namespaces import (
     Viz,
     Voxels,
 )
-from ...core.parallel import DEFAULT_SKELETON_WORKERS, map_ordered
+from ...core.parallel import DEFAULT_NEURON_WORKERS, map_ordered
 from ...core.segmentation import Segmentation
 from ...core.spec import Cap
 from ...core.version import Version
@@ -302,13 +302,13 @@ class NeuPrintDataset(Dataset):
 
     def _fetch_skeletons(
         self, ids, version, *, heal: bool = True, progress: bool = True,
-        max_workers: int = DEFAULT_SKELETON_WORKERS,
+        max_workers: int = DEFAULT_NEURON_WORKERS,
     ):
         """Yield ``(body_id, node_table)`` for each neuron, in the order asked for.
 
         Threaded: a skeleton is one request per neuron either way, so serially it is
         a round trip of dead time each. See
-        :data:`~connecto.core.parallel.DEFAULT_SKELETON_WORKERS`.
+        :data:`~connecto.core.parallel.DEFAULT_NEURON_WORKERS`.
 
         No ``**opts``: an unrecognised keyword should be a ``TypeError`` naming
         itself rather than a silently ignored request.

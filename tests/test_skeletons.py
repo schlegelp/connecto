@@ -14,6 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -291,3 +292,44 @@ def test_neuprint_skeletons_refuse_an_unknown_keyword():
 
     with pytest.raises(TypeError, match="wrokers"):
         list(ds._fetch_skeletons([1], None, wrokers=2))
+
+
+# ---------------------------------------------------------------- the L2 namespace
+
+
+def test_l2_principal_axis_filter_rejects_uninitialised_memory():
+    """A missing pca is garbage bytes, not a zero vector, and must not survive.
+
+    caveclient fills a missing attribute with `np.empty` rather than NaN, so a chunk
+    the L2 cache has no principal axis for arrives as whatever was in memory. Zeros
+    most of the time - which is why the old `norm > 0` test mostly worked - but not
+    always, and a 3e-30 vector passed that test and reached NBLAST as a direction.
+    Unit length is the property only a real axis has.
+    """
+    from connecto.backends.cave.l2 import _has_principal_axis
+
+    unit = np.array([[1.0, 0, 0], [0, 0.6, 0.8], [-0.577350, 0.577350, 0.577350]])
+    junk = np.array([
+        [0.0, 0, 0],                       # zero-filled page: the common case
+        [2.914e-30, 0, 0],                 # reused page: the one that got through
+        [1e12, -3e11, 7e10],               # arbitrary large garbage
+        [0.5, 0.5, 0.5],                   # plausible-looking but not unit length
+    ])
+
+    assert _has_principal_axis(unit).all()
+    assert not _has_principal_axis(junk).any()
+
+    # float32 storage rounds a unit vector slightly; that must still count.
+    assert _has_principal_axis(unit.astype("float32").astype("float64")).all()
+
+
+def test_l2_namespace_methods_take_progress_and_max_workers():
+    """All four fan out per neuron, so all four expose the same two knobs."""
+    import inspect
+
+    from connecto.backends.cave.l2 import L2
+
+    for name in ("info", "graph", "skeleton", "dotprops"):
+        params = inspect.signature(getattr(L2, name)).parameters
+        assert "progress" in params, f"L2.{name} has no progress bar"
+        assert "max_workers" in params, f"L2.{name} cannot be tuned"

@@ -32,9 +32,10 @@ import pandas as pd
 
 from ...core.dataset import requires
 from ...core.namespaces import _Namespace
+from ...core.parallel import DEFAULT_NEURON_WORKERS, map_ordered
 from ...core.spec import Cap
 from ...exceptions import CapabilityError
-from .skeletons import l2_skeleton
+from .skeletons import L2_SKELETON_ATTRIBUTES, l2_info, l2_skeleton
 
 __all__ = ["L2"]
 
@@ -50,7 +51,10 @@ class L2(_Namespace):
     """Level-2 chunk data: cheap skeletons and dotprops."""
 
     @requires(Cap.L2CACHE)
-    def info(self, x, *, version=None) -> pd.DataFrame:
+    def info(
+        self, x, *, version=None, progress: bool = True,
+        max_workers: int = DEFAULT_NEURON_WORKERS,
+    ) -> pd.DataFrame:
         """Per-chunk table: position (nm), volume, surface area.
 
         One row per level-2 chunk, with the ``id`` of the neuron it belongs to. This is
@@ -61,8 +65,11 @@ class L2(_Namespace):
         ids = ds.ids(x, version=version)
 
         frames = []
-        for root in ids:
-            df = _l2_table(ds, int(root), attributes=["rep_coord_nm", "size_nm3", "area_nm2"])
+        for root, df in map_ordered(
+            (int(i) for i in ids),
+            lambda root: _l2_table(ds, root, attributes=L2_SKELETON_ATTRIBUTES),
+            workers=max_workers, desc="L2 info", progress=progress,
+        ):
             if not len(df):
                 continue
             out = pd.DataFrame(
@@ -84,7 +91,10 @@ class L2(_Namespace):
         return pd.concat(frames, ignore_index=True)
 
     @requires(Cap.L2CACHE)
-    def graph(self, x, *, version=None):
+    def graph(
+        self, x, *, version=None, progress: bool = True,
+        max_workers: int = DEFAULT_NEURON_WORKERS,
+    ):
         """The level-2 chunk graph, as ``networkx.Graph`` (one per neuron).
 
         Returns a dict keyed by root ID. This is the connectivity of the chunks
@@ -93,17 +103,27 @@ class L2(_Namespace):
         import networkx as nx
 
         ds = self._ds
-        out = {}
-        for root in ds.ids(x, version=version):
-            root = int(root)
-            edges = ds.client.chunkedgraph.level2_chunk_graph(root)
+
+        def one(root: int) -> nx.Graph:
             g = nx.Graph()
-            g.add_edges_from([(int(a), int(b)) for a, b in edges])
-            out[root] = g
-        return out
+            g.add_edges_from(
+                [(int(a), int(b)) for a, b in ds.client.chunkedgraph.level2_chunk_graph(root)]
+            )
+            return g
+
+        return dict(
+            map_ordered(
+                (int(i) for i in ds.ids(x, version=version)),
+                one,
+                workers=max_workers, desc="L2 graphs", progress=progress,
+            )
+        )
 
     @requires(Cap.L2CACHE)
-    def skeleton(self, x, *, version=None):
+    def skeleton(
+        self, x, *, version=None, progress: bool = True,
+        max_workers: int = DEFAULT_NEURON_WORKERS,
+    ):
         """Skeletons built from the L2 chunk graph -> ``navis.NeuronList``.
 
         Positions are nanometres. Nodes are chunk *representative coordinates*, and two
@@ -127,24 +147,45 @@ class L2(_Namespace):
         # ID*, not on a materialization. The ID already carries the state of the
         # segmentation, so there is nothing left for a version to pin.
         ds = self._ds
-        neurons = []
-        for root in ds.ids(x, version=version):
-            root = int(root)
+
+        def one(root: int):
             n = navis.TreeNeuron(l2_skeleton(ds, root), id=root, units="1 nm")
             n.name = str(root)
-            neurons.append(n)
-        return navis.NeuronList(neurons)
+            return n
+
+        return navis.NeuronList(
+            [
+                n
+                for _, n in map_ordered(
+                    (int(i) for i in ds.ids(x, version=version)),
+                    one,
+                    workers=max_workers, desc="L2 skeletons", progress=progress,
+                )
+            ]
+        )
 
     @requires(Cap.L2CACHE)
-    def dotprops(self, x, *, units: str = "nm", version=None):
+    def dotprops(
+        self, x, *, units: str = "nm", version=None, progress: bool = True,
+        max_workers: int = DEFAULT_NEURON_WORKERS,
+    ):
         """Dotprops straight from the L2 cache -> ``navis.NeuronList``.
 
         No skeletonisation: ``rep_coord_nm`` is the point and ``pca_0`` the vector, both
         computed server-side.
 
-        Chunks with a degenerate (all-zero) principal axis are **dropped** - they are
-        too blobby to have a direction, and passing a zero vector to NBLAST would have
-        it silently score them as if they did.
+        Chunks the cache has no principal axis for are **dropped** - they are too
+        blobby to have a direction, and passing a non-direction to NBLAST would have
+        it silently score them as if they did. See :func:`_has_principal_axis` for
+        why "no axis" is not simply "all zero".
+
+        **Expect the point count to move a little between calls.** The L2 cache
+        computes an attribute it does not have on demand and answers with what it
+        has ready, so how many chunks come back with a principal axis depends on how
+        busy it is - measurably so: the same MICrONS neuron yields 2541 points
+        fetched on its own and 2540 with five other requests in flight. That is the
+        service, not this code, and it is why these dotprops are for shape
+        comparison rather than for anything that needs to be identical twice.
 
         ``units`` defaults to ``"nm"``, like everything else connecto returns. **NBLAST
         is calibrated in microns**: hand it nanometre dotprops and every score collapses
@@ -161,14 +202,13 @@ class L2(_Namespace):
         scale = _SCALE[units]
 
         ds = self._ds
-        out = []
-        for root in ds.ids(x, version=version):
-            root = int(root)
+
+        def one(root: int):
             df = _l2_table(ds, root, attributes=["rep_coord_nm", "pca"])
             pts = df[_XYZ].to_numpy("float32")
             vect = df[_PCA0].to_numpy("float32")
 
-            keep = np.linalg.norm(vect, axis=1) > 0
+            keep = _has_principal_axis(vect)
             if not keep.any():
                 raise CapabilityError(
                     f"{ds.label}: no level-2 chunk of {root} has a principal axis, so "
@@ -183,16 +223,51 @@ class L2(_Namespace):
                 units=f"1 {_UNIT_NAME[units]}",
             )
             dp.name = str(root)
-            out.append(dp)
-        return navis.NeuronList(out)
+            return dp
+
+        return navis.NeuronList(
+            [
+                dp
+                for _, dp in map_ordered(
+                    (int(i) for i in ds.ids(x, version=version)),
+                    one,
+                    workers=max_workers, desc="L2 dotprops", progress=progress,
+                )
+            ]
+        )
+
+
+def _has_principal_axis(vect: np.ndarray) -> np.ndarray:
+    """Which of these ``pca_0`` rows are a real principal axis, by unit length.
+
+    Not ``norm > 0``, which is the obvious test and is wrong. caveclient fills a
+    *missing* attribute with ``np.empty`` - uninitialised memory - rather than with
+    NaN (see ``l2cache._flatten_pca``), so a chunk the cache has no axis for arrives
+    as whatever bytes happened to be lying around. Freshly mapped pages are
+    zero-filled, which is why ``norm > 0`` mostly worked; reused ones are not, and
+    then a chunk with no axis arrives with a norm of 3e-30, passes the test, and is
+    handed to NBLAST as though it were a direction.
+
+    A real principal axis is a unit vector; on MICrONS the populated ones measure
+    0.99971 to 1.00036 after the float32 round trip, and the missing ones separate
+    cleanly (278 of 278 kept, 0 of 122). Garbage is never plausibly unit length.
+
+    This does *not* make ``dotprops`` reproducible run to run, and it was a mistake
+    to think it would: see the note on cache readiness in :meth:`L2.dotprops`. It
+    fixes a different thing - a chunk with no axis being kept as if it had one.
+    """
+    return np.abs(np.linalg.norm(vect, axis=1) - 1.0) < 1e-3
 
 
 def _l2_table(ds, root: int, *, attributes) -> pd.DataFrame:
-    """Level-2 attributes for one neuron, with the rows that have no position dropped."""
-    l2_ids = ds.client.chunkedgraph.get_leaves(root, stop_layer=2)
-    df = ds.client.l2cache.get_l2data_table(
-        l2_ids.tolist(), attributes=attributes, split_columns=True
-    )
+    """Level-2 attributes for one neuron, with the rows that have no position dropped.
+
+    The fetch itself is :func:`~connecto.backends.cave.skeletons.l2_info`; what is
+    added here is dropping the positionless chunks. `l2_skeleton` wants them kept
+    long enough to tell "the cache has nothing for this neuron" apart from "the cache
+    has chunks but no coordinates", which is a different error message.
+    """
+    df = l2_info(ds, root, attributes=attributes)
     if "rep_coord_nm_x" in df.columns:
         df = df.dropna(subset=["rep_coord_nm_x"])
     return df

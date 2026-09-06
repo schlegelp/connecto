@@ -20,28 +20,33 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-__all__ = ["DEFAULT_SKELETON_WORKERS", "map_ordered"]
+__all__ = ["DEFAULT_NEURON_WORKERS", "map_ordered"]
 
-#: Neurons in flight in each backend's ``_fetch_skeletons``.
+#: Neurons in flight when a call is one request per neuron.
 #:
-#: A skeleton is one request per neuron - a read from a published bucket, a call to
-#: CAVE's skeleton service, or the three CAVE calls an L2 skeleton needs - so this is
-#: the whole of the parallelism available, and it matters more here than anywhere
-#: else in connecto. Measured over 16 neurons:
+#: Skeletons in each backend's ``_fetch_skeletons``, and every method of the
+#: :class:`~connecto.backends.cave.l2.L2` namespace. In all of them a neuron costs a
+#: round trip and nothing else - a read from a published bucket, a call to CAVE's
+#: skeleton service, or the chunkedgraph and l2cache calls behind an L2 query - so
+#: this is the whole of the parallelism available, and it matters more here than
+#: anywhere else in connecto. Measured over 16 neurons:
 #:
 #: * precomputed bucket (FlyWire): 2.2 s serial, 0.22 s at 8 workers.
 #: * CAVE skeleton service (MICrONS): 52.6 s serial, 5.3 s at 8.
 #: * neuPrint store (hemibrain): 5.6 s serial, 1.3 s at 8.
 #:
-#: 8 rather than more because all three curves stop there and two of them turn back
-#: up at 16 (0.27 s and 1.5 s) - and unlike mesh fragments, which come off a public
-#: bucket, two of these three routes are somebody's query service.
+#: and over 8 MICrONS neurons through the L2 cache: 36.8 s serial, 8.2 s at 8.
+#:
+#: 8 rather than more because every one of those curves stops there - L2 gains 3%
+#: going to 16, and two of the skeleton routes turn back up - and unlike mesh
+#: fragments, which come off a public bucket, most of these routes are somebody's
+#: query service.
 #:
 #: Not in :mod:`connecto.precomputed.limits` with the mesh budgets, because it is not
 #: coupled to them: those nest inside one another and their product has to stay under
-#: a connection pool, while this one is a flat fan-out over three different services,
-#: only one of which is a precomputed bucket at all.
-DEFAULT_SKELETON_WORKERS = 8
+#: a connection pool, while this one is a flat fan-out over several services, only one
+#: of which is a precomputed bucket at all.
+DEFAULT_NEURON_WORKERS = 8
 
 
 def map_ordered(
