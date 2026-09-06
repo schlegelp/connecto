@@ -6,7 +6,11 @@ Implements the same ten ``_fetch_*`` hooks as the CAVE backend, against
 
 from __future__ import annotations
 
+import contextlib
+import copy
+import functools
 import logging
+import queue
 
 import numpy as np
 import pandas as pd
@@ -23,6 +27,7 @@ from ...core.namespaces import (
     Viz,
     Voxels,
 )
+from ...core.parallel import DEFAULT_SKELETON_WORKERS, map_ordered
 from ...core.segmentation import Segmentation
 from ...core.spec import Cap
 from ...core.version import Version
@@ -260,35 +265,55 @@ class NeuPrintDataset(Dataset):
 
     # ---------------------------------------------------------------- morphology
 
+    @functools.cached_property
+    def _skeleton_clients(self) -> queue.LifoQueue:
+        """Warm neuPrint clients waiting to be borrowed. See `_borrowed_client`."""
+        return queue.LifoQueue()
+
+    @contextlib.contextmanager
+    def _borrowed_client(self, pool: queue.LifoQueue):
+        """Borrow a neuPrint client for the calling thread, and give it back.
+
+        neuprint-python keeps per-thread deep copies of its own default client
+        (``DEFAULT_NEUPRINT_CLIENT_THREAD_COPIES``, keyed by thread and pid) rather
+        than share one, which is as clear a statement as the library makes that a
+        ``Client`` is not to be shared across threads. That machinery only runs for
+        callers who let neuprint pick the client; connecto passes one explicitly, so
+        it never fires for us and this door has to do the same thing itself. (The
+        CAVE door shares its client instead - see ``backends.cave.skeletons``, where
+        caveclient's own use of threads settles the question the other way.)
+
+        Pooled on the dataset rather than made fresh per call, because a copied
+        ``Client`` copies no connections: ``requests`` drops the pool manager on
+        pickle, so the copy's first request pays a fresh TCP and TLS handshake -
+        measured at 645 ms against 114 ms once warm. Made per call, eight copies
+        meant eight handshakes every time, which was most of what a small fetch
+        cost. The queue holds at most one client per concurrent worker, since a
+        borrower always returns it.
+        """
+        try:
+            client = pool.get_nowait()
+        except queue.Empty:
+            client = copy.deepcopy(self.client)
+        try:
+            yield client
+        finally:
+            pool.put(client)
+
     def _fetch_skeletons(
         self, ids, version, *, heal: bool = True, progress: bool = True,
-        workers: int | None = None, **opts,
+        max_workers: int = DEFAULT_SKELETON_WORKERS,
     ):
         """Yield ``(body_id, node_table)`` for each neuron, in the order asked for.
 
         Threaded: a skeleton is one request per neuron either way, so serially it is
-        a round trip of dead time each. 16 hemibrain skeletons take 5.6 s one at a
-        time and 1.3 s eight at a time. See
-        :data:`~connecto.precomputed.limits.DEFAULT_SKELETON_WORKERS`.
+        a round trip of dead time each. See
+        :data:`~connecto.core.parallel.DEFAULT_SKELETON_WORKERS`.
 
-        Each worker gets its *own* neuPrint client. neuprint-python keeps per-thread
-        deep copies of its own default client (``DEFAULT_NEUPRINT_CLIENT_THREAD_COPIES``,
-        keyed by thread and pid) rather than share one, which is as clear a statement
-        as the library makes that a ``Client`` is not to be shared across threads.
-        That machinery only runs for callers who let neuprint pick the client;
-        connecto passes one explicitly, so it never fires for us and we have to do
-        the same thing ourselves. A copy costs ~0.2 ms and happens once per thread.
-
-        The CAVE door shares its client instead - see ``backends.cave.skeletons``,
-        where caveclient's own use of threads settles the question the other way.
+        No ``**opts``: an unrecognised keyword should be a ``TypeError`` naming
+        itself rather than a silently ignored request.
         """
-        import copy
-        import threading
-        from concurrent.futures import ThreadPoolExecutor
-
-        from tqdm.auto import tqdm
-
-        from ...precomputed.limits import DEFAULT_SKELETON_WORKERS
+        from ...core.volume import precomputed_skeleton
 
         # A published precomputed bucket wins over neuPrint's own skeleton store.
         # Not every neuPrint dataset *has* a store - `flywire-fafb:v783b` answers
@@ -297,31 +322,22 @@ class NeuPrintDataset(Dataset):
         # anyway. Backend-independent by design: it is a plain HTTPS bucket.
         source = self._skeleton_source(version)
 
-        local = threading.local()
-
-        def client_here(self=self):
-            client = getattr(local, "client", None)
-            if client is None:
-                client = local.client = copy.deepcopy(self.client)
-            return client
+        # Resolved here, on the calling thread, so the workers never race to build it.
+        clients = self._skeleton_clients
 
         def one(body: int):
             if source is not None:
-                from ...core.volume import precomputed_skeleton
-
                 return precomputed_skeleton(source, body)
-            return client_here().fetch_skeleton(body, heal=heal, format="pandas")
+            with self._borrowed_client(clients) as client:
+                return client.fetch_skeleton(body, heal=heal, format="pandas")
 
-        bodies = [int(i) for i in ids]
-        budget = DEFAULT_SKELETON_WORKERS if workers is None else int(workers)
-        with ThreadPoolExecutor(max_workers=max(1, min(budget, len(bodies) or 1))) as pool:
-            yield from tqdm(
-                zip(bodies, pool.map(one, bodies)),
-                desc="Skeletons",
-                total=len(bodies),
-                disable=not progress or len(bodies) < 2,
-                leave=False,
-            )
+        yield from map_ordered(
+            (int(i) for i in ids),
+            one,
+            workers=max_workers,
+            desc="Skeletons",
+            progress=progress,
+        )
 
     def _fetch_meshes(self, ids, version, *, lod=None, progress: bool = True, **opts):
         """Yield ``(body_id, trimesh.Trimesh)``.

@@ -60,13 +60,7 @@ def test_cloudvolume_patch_restores_after_an_error():
 
 
 def test_cloudvolume_patch_survives_concurrent_use():
-    """The failure mode that threading `fetch_skeletons` introduced.
-
-    The patch swaps a method on a client every worker shares. Save-patch-restore per
-    thread loses that race in the worst possible way: the second thread in saves the
-    *first* thread's stub as "the original" and restores that on the way out, so the
-    stub stays installed for the life of the client and every later caller gets
-    `None` for a volume it may genuinely need - a wrong answer that raises nothing.
+    """The failure mode threading introduced - see `_without_cloudvolume_root_check`.
 
     Overlap is forced rather than hoped for: every thread waits on the same barrier
     while inside the patch, so all of them are holding it at once.
@@ -116,7 +110,8 @@ def test_cave_skeletons_keep_the_order_they_were_asked_for(monkeypatch):
     ds = SimpleNamespace(_skeleton_source=lambda version: "https://bucket/skeletons")
 
     ids = [10, 20, 30, 40, 50, 60]
-    delays.update({10: 0.20, 20: 0.15, 30: 0.10})
+    # Descending, so the ids asked for first are the ones that finish last.
+    delays.update({10: 0.02, 20: 0.015, 30: 0.01})
 
     got = list(cave_skeletons.fetch_skeletons(ds, ids, None, progress=False))
 
@@ -146,47 +141,67 @@ def test_cave_skeletons_actually_run_concurrently(monkeypatch):
     ds = SimpleNamespace(_skeleton_source=lambda version: "https://bucket/skeletons")
 
     got = list(
-        cave_skeletons.fetch_skeletons(ds, range(8), None, progress=False, workers=8)
+        cave_skeletons.fetch_skeletons(ds, range(8), None, progress=False, max_workers=8)
     )
 
     assert [root for root, _ in got] == list(range(8))
     assert not barrier.broken
 
 
-def test_cave_skeletons_workers_is_honoured(monkeypatch):
-    """`workers=1` is the escape hatch, so it has to really mean one."""
+def test_cave_skeletons_max_workers_is_honoured(monkeypatch):
+    """`max_workers=1` is the escape hatch, so it has to really mean one.
+
+    No sleep: with one worker there is exactly one thread by construction, so the
+    set of thread ids says everything and waiting would only slow the suite.
+    """
     threads = set()
 
     def fake_skeleton(source, root):
         threads.add(threading.current_thread().ident)
-        time.sleep(0.02)
         return _nodes(root)
 
     monkeypatch.setattr(cave_skeletons, "precomputed_skeleton", fake_skeleton)
     ds = SimpleNamespace(_skeleton_source=lambda version: "https://bucket/skeletons")
 
-    list(cave_skeletons.fetch_skeletons(ds, range(6), None, progress=False, workers=1))
+    list(cave_skeletons.fetch_skeletons(ds, range(6), None, progress=False, max_workers=1))
     assert len(threads) == 1
+
+
+def test_cave_skeletons_refuse_an_unknown_keyword():
+    """A misspelled option must not run silently at the default.
+
+    `**opts` used to swallow it: `skeletons.get(x, wrokers=2)` fetched eight at a
+    time and said nothing.
+    """
+    ds = SimpleNamespace(_skeleton_source=lambda version: "https://bucket/skeletons")
+
+    with pytest.raises(TypeError, match="wrokers"):
+        list(cave_skeletons.fetch_skeletons(ds, [1], None, wrokers=2))
 
 
 # ------------------------------------------------------- the neuPrint fan-out
 
-_USED_CLIENTS: list[int] = []
 
-#: Module-level so the deep copies handed to each thread all reach the *same* one -
-#: an attribute on the client would be copied along with it, one barrier per thread,
-#: and nothing would ever wait.
-_BARRIER: threading.Barrier | None = None
+def _neuprint_ds(source, client):
+    """The three methods under test, given the two attributes they need.
 
+    Borrowing the real methods onto a bare class rather than building a
+    `NeuPrintDataset` keeps this offline - a real one wants a live server - while
+    still exercising the actual pooling and copying, not a paraphrase of it.
+    """
+    from connecto.backends.neuprint.dataset import NeuPrintDataset
 
-class _FakeNeuPrintClient:
-    """Records which client instance served each call, across deep copies."""
+    class _DS:
+        _skeleton_clients = NeuPrintDataset._skeleton_clients
+        _borrowed_client = NeuPrintDataset._borrowed_client
+        _fetch_skeletons = NeuPrintDataset._fetch_skeletons
 
-    def fetch_skeleton(self, body, heal=True, format="pandas"):
-        _USED_CLIENTS.append(id(self))
-        if _BARRIER is not None:
-            _BARRIER.wait()
-        return _nodes(body)
+        def _skeleton_source(self, version):
+            return source
+
+    ds = _DS()
+    ds.client = client
+    return ds
 
 
 def test_neuprint_skeletons_give_each_thread_its_own_client():
@@ -197,46 +212,82 @@ def test_neuprint_skeletons_give_each_thread_its_own_client():
     not copy, several threads would share one `Client` and one `requests.Session`,
     which is the arrangement neuprint itself goes out of its way to avoid.
 
-    All eight are held at a barrier so that eight threads really are live at once -
-    otherwise a fast worker can drain the whole queue before its colleagues start,
-    one copy serves everything, and "each thread got its own" passes or fails on
-    scheduling luck.
-    """
-    global _BARRIER
-    from connecto.backends.neuprint.dataset import NeuPrintDataset
+    All eight are held at a barrier so eight threads really are live at once;
+    otherwise a fast worker can drain the queue before its colleagues start, one
+    copy serves everything, and this passes or fails on scheduling luck.
 
-    _USED_CLIENTS.clear()
-    _BARRIER = threading.Barrier(8, timeout=10)
-    client = _FakeNeuPrintClient()
-    ds = SimpleNamespace(_skeleton_source=lambda version: None, client=client)
+    The fake is defined in the test body on purpose: `deepcopy` treats a class as
+    atomic, so every copy shares these closure cells and reports into the same list.
+    """
+    used = []
+    barrier = threading.Barrier(8, timeout=10)
+
+    class FakeClient:
+        def fetch_skeleton(self, body, heal=True, format="pandas"):
+            used.append(id(self))
+            barrier.wait()
+            return _nodes(body)
+
+    client = FakeClient()
+    ds = _neuprint_ds(None, client)
 
     bodies = list(range(8))
-    try:
-        got = list(
-            NeuPrintDataset._fetch_skeletons(ds, bodies, None, progress=False, workers=8)
-        )
-    finally:
-        _BARRIER = None
+    got = list(ds._fetch_skeletons(bodies, None, progress=False, max_workers=8))
 
     assert [body for body, _ in got] == bodies
     # The client connecto holds must never be the one that serves a query...
-    assert id(client) not in _USED_CLIENTS, "the shared client served a query"
+    assert id(client) not in used, "the shared client served a query"
     # ...and with eight threads provably live, there must be eight separate copies.
-    assert len(set(_USED_CLIENTS)) == 8
+    assert len(set(used)) == 8
+
+
+def test_neuprint_skeleton_clients_are_reused_across_calls():
+    """Copies are pooled, not remade - a fresh one has no warmed connections.
+
+    `requests` drops its pool manager on pickle, so a copied `Client` reconnects
+    from scratch: 645 ms against 114 ms once warm, measured against hemibrain. Made
+    per call, that handshake was most of what a small fetch cost.
+    """
+    used = []
+
+    class FakeClient:
+        def fetch_skeleton(self, body, heal=True, format="pandas"):
+            used.append(id(self))
+            return _nodes(body)
+
+    ds = _neuprint_ds(None, FakeClient())
+
+    list(ds._fetch_skeletons(range(4), None, progress=False, max_workers=2))
+    first = set(used)
+    list(ds._fetch_skeletons(range(4), None, progress=False, max_workers=2))
+
+    assert set(used) == first, "the second call built fresh clients"
+    assert ds._skeleton_clients.qsize() == len(first)
 
 
 def test_neuprint_skeletons_prefer_a_published_bucket(monkeypatch):
     """A precomputed bucket wins, and then no neuPrint client is touched at all."""
-    from connecto.backends.neuprint import dataset as np_dataset
     from connecto.core import volume as core_volume
 
-    _USED_CLIENTS.clear()
+    used = []
+
+    class FakeClient:
+        def fetch_skeleton(self, body, heal=True, format="pandas"):
+            used.append(id(self))
+            return _nodes(body)
+
     monkeypatch.setattr(core_volume, "precomputed_skeleton", lambda src, body: _nodes(body))
+    ds = _neuprint_ds("https://bucket", FakeClient())
 
-    client = _FakeNeuPrintClient()
-    ds = SimpleNamespace(_skeleton_source=lambda version: "https://bucket", client=client)
-
-    got = list(np_dataset.NeuPrintDataset._fetch_skeletons(ds, [1, 2, 3], None, progress=False))
+    got = list(ds._fetch_skeletons([1, 2, 3], None, progress=False))
 
     assert [body for body, _ in got] == [1, 2, 3]
-    assert _USED_CLIENTS == []
+    assert used == []
+
+
+def test_neuprint_skeletons_refuse_an_unknown_keyword():
+    """Same as the CAVE door: a misspelled option raises rather than being dropped."""
+    ds = _neuprint_ds(None, object())
+
+    with pytest.raises(TypeError, match="wrokers"):
+        list(ds._fetch_skeletons([1], None, wrokers=2))

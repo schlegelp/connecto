@@ -32,12 +32,14 @@ storage layer cost some 78 MB of dependencies that reading never touches.
 from __future__ import annotations
 
 import collections
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
 from ..precomputed import Bbox, Volume, is_graphene
 from ..precomputed.limits import DEFAULT_MESH_WORKERS
+from .parallel import map_ordered
 
 __all__ = [
     "GSPointLoader",
@@ -64,6 +66,7 @@ PRECOMPUTED_SKELETON_COLMAP = {
 PRECOMPUTED_SKELETON_UNITS = "nm"
 
 _VOLUMES: dict = {}
+_VOLUME_LOCK = threading.Lock()
 
 # What a neuroglancer precomputed skeleton bucket looks like. Passed explicitly
 # because these buckets typically ship no `info` of their own.
@@ -115,17 +118,26 @@ def _volume_kwargs(ds, source: str) -> dict:
 
 
 def get_volume(ds, source: str | None = None):
-    """A volume onto ``source`` (default: this dataset's segmentation), cached."""
+    """A volume onto ``source`` (default: this dataset's segmentation), cached.
+
+    Built under a lock, because the callers are threaded now: eight skeleton workers
+    reaching a cold cache together would each build their own volume and each fetch
+    the same ``info``, then seven of them would throw the result away. The wall clock
+    barely notices - it is one round trip either way - but it is eight requests at a
+    service connecto is otherwise careful not to hammer. ``precomputed.image`` guards
+    its reader for the same reason.
+    """
     if source is None:
         source = ds._segmentation_source()
     if source is None:
         raise ValueError(f"{ds.label} declares no segmentation source.")
 
-    if source not in _VOLUMES:
-        _VOLUMES[source] = Volume(
-            source, fill_missing=True, **_volume_kwargs(ds, source)
-        )
-    return _VOLUMES[source]
+    with _VOLUME_LOCK:
+        if source not in _VOLUMES:
+            _VOLUMES[source] = Volume(
+                source, fill_missing=True, **_volume_kwargs(ds, source)
+            )
+        return _VOLUMES[source]
 
 
 def _to_volume_nm(vol, locs, units: str) -> np.ndarray:
@@ -302,8 +314,6 @@ def fetch_meshes(
     and those differ by an order of magnitude for exactly that reason; see
     :mod:`connecto.precomputed.limits`.
     """
-    from tqdm.auto import tqdm
-
     vol = get_volume(ds, source)
     ids = [int(i) for i in ids]
     # Only pass `lod` when the caller meant one. Graphene meshes have no levels of
@@ -313,15 +323,13 @@ def fetch_meshes(
     if parallel is not None:
         kwargs["parallel"] = int(parallel)
 
-    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(ids) or 1))) as pool:
-        meshes = pool.map(lambda i: vol.mesh.get(i, **kwargs), ids)
-        yield from tqdm(
-            zip(ids, meshes),
-            desc="Meshes",
-            total=len(ids),
-            disable=not progress or len(ids) < 2,
-            leave=False,
-        )
+    yield from map_ordered(
+        ids,
+        lambda i: vol.mesh.get(i, **kwargs),
+        workers=max_workers,
+        desc="Meshes",
+        progress=progress,
+    )
 
 
 def get_voxels(ds, seg_id: int, *, mip: int = 0, source: str | None = None) -> np.ndarray:

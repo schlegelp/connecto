@@ -19,15 +19,14 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
 
+from ...core.parallel import DEFAULT_SKELETON_WORKERS, map_ordered
 from ...core.spec import Cap
 from ...core.volume import precomputed_skeleton
 from ...exceptions import CapabilityError, ConnectoError
-from ...precomputed.limits import DEFAULT_SKELETON_WORKERS
 
 logger = logging.getLogger("connecto")
 
@@ -35,23 +34,24 @@ __all__ = ["fetch_skeletons", "l2_skeleton", "l2_info"]
 
 
 def fetch_skeletons(
-    ds, ids, version, *, progress: bool = True, workers: int | None = None, **opts
+    ds, ids, version, *, progress: bool = True, max_workers: int = DEFAULT_SKELETON_WORKERS
 ):
     """Yield ``(root_id, node_table)`` for each neuron, in the order asked for.
 
-    Threaded, because every route here is one request per neuron and nothing else:
-    a bucket read, a call to the skeleton service, or the two CAVE calls an L2
-    skeleton needs. Serially that is a round trip of dead time per neuron - 16
-    MICrONS skeletons take 52 s one at a time and 5 s eight at a time. See
-    :data:`~connecto.precomputed.limits.DEFAULT_SKELETON_WORKERS`.
+    Threaded, because every route here is one request per neuron and nothing else: a
+    bucket read, a call to the skeleton service, or the three CAVE calls an L2
+    skeleton needs. Serially that is a round trip of dead time per neuron; see
+    :data:`~connecto.core.parallel.DEFAULT_SKELETON_WORKERS` for what that costs.
 
     The CAVE client is shared across the workers rather than copied per thread.
     caveclient fans its own queries out over a ``ThreadPoolExecutor`` holding one
     client, so that is the library's own position on the question; the neuPrint door
     has to do the opposite, and says why there.
-    """
-    from tqdm.auto import tqdm
 
+    No ``**opts``: an unrecognised keyword should be a ``TypeError`` naming itself,
+    not a silently ignored request. ``ds.skeletons.get(x, workers=2)`` used to run at
+    the default and say nothing.
+    """
     source = ds._skeleton_source(version)
     use_service = source is None and _service_available(ds)
 
@@ -87,16 +87,13 @@ def fetch_skeletons(
 
         return l2_skeleton(ds, root)
 
-    roots = [int(i) for i in ids]
-    budget = DEFAULT_SKELETON_WORKERS if workers is None else int(workers)
-    with ThreadPoolExecutor(max_workers=max(1, min(budget, len(roots) or 1))) as pool:
-        yield from tqdm(
-            zip(roots, pool.map(one, roots)),
-            desc="Skeletons",
-            total=len(roots),
-            disable=not progress or len(roots) < 2,
-            leave=False,
-        )
+    yield from map_ordered(
+        (int(i) for i in ids),
+        one,
+        workers=max_workers,
+        desc="Skeletons",
+        progress=progress,
+    )
 
 
 def _service_available(ds) -> bool:
@@ -145,12 +142,14 @@ def _without_cloudvolume_root_check(ds):
     dependency this reader exists to replace.
 
     Reference-counted, because this swaps a method on a client several threads share
-    and ``fetch_skeletons`` now runs them concurrently. Save-patch-restore per thread
+    and ``fetch_skeletons`` runs them concurrently. Save-patch-restore per thread
     loses that race in the worst way: the second thread in saves the *first* thread's
     stub as the original, and restores it on the way out - so the stub stays
     installed for the life of the client, and every later caller gets ``None`` for a
     volume it may genuinely need. Only the outermost entry patches, only the last
     exit restores, and the lock is held for the swap alone rather than the request.
+    Two concurrent ``skeletons.get()`` calls need this as much as one call's workers
+    do, which is why it is counted here rather than entered once around the fan-out.
 
     Remove this once caveclient no longer reaches for cloud-volume to answer a
     question about a 64-bit integer.
