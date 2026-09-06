@@ -160,7 +160,7 @@ MALECNS = DatasetSpec(
     backends=(
         BackendSpec(
             "neuprint",
-            "neuprint-cns.janelia.org/male-cns:v1.0",
+            "neuprint.janelia.org/male-cns:v1.0",
             # Seven, on the Synapse nodes. No tyramine and no `unknown` class -
             # unlike BANC (eight) and MANC (three plus `unknown`), which is why
             # these are declared per dataset and not once for "neuPrint".
