@@ -26,6 +26,7 @@ from ...core.namespaces import (
     Viz,
     Voxels,
 )
+from ...core.parallel import SESSION_POOL_MAXSIZE
 from ...core.segmentation import Segmentation
 from ...core.spec import TRANSMITTERS, Cap
 from ...core.version import Version
@@ -49,6 +50,35 @@ __all__ = ["CAVEDataset"]
 _NT_TABLE_COLMAP = {"id": "synapse_id", "nt": "type", "nt_confidence": "value"}
 
 _CLIENTS: dict = {}
+
+
+def _widen_session_pool() -> None:
+    """Let caveclient keep as many connections as connecto's fan-out asks for.
+
+    caveclient gives every sub-client its own session, each retaining 10-20
+    connections by default. connecto fans out per *neuron*: ``ds.l2.skeleton`` at the
+    shipped default already puts 16 requests on the chunkedgraph at once, and a
+    tuned ``max_workers`` puts more. Past the ceiling urllib3 does not queue - it
+    discards the connection it cannot keep and logs "Connection pool is full,
+    discarding connection", and the next read re-handshakes. That warning is not
+    noise to be silenced; it is the sound of the concurrency being spent on TCP
+    setup, and raising the ceiling is what makes it both stop and be true.
+
+    Read-modify-write, because ``set_session_defaults`` assigns *every* field from
+    its arguments: passing only ``pool_maxsize`` would quietly reset a caller's
+    retry policy and backoff to caveclient's defaults. And raise-only, so a caller
+    who has already asked for more keeps it.
+
+    Global, which is caveclient's design - the defaults are read when a session is
+    built, and its sub-clients are built lazily, so there is no per-client hook to
+    use instead. Applied before the first client is constructed for that reason.
+    """
+    import caveclient
+
+    defaults = caveclient.get_session_defaults()
+    if defaults.get("pool_maxsize", 0) >= SESSION_POOL_MAXSIZE:
+        return
+    caveclient.set_session_defaults(**{**defaults, "pool_maxsize": SESSION_POOL_MAXSIZE})
 
 
 class CAVEDataset(Dataset):
@@ -136,6 +166,7 @@ class CAVEDataset(Dataset):
         key = self.source
         client = _CLIENTS.get(key)
         if client is None:
+            _widen_session_pool()
             token = get_token("cave").token
             # CAVEclient hits the info service during construction, so this is where
             # both a bad token and a dead deployment first bite - translate them here

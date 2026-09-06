@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-__all__ = ["DEFAULT_NEURON_WORKERS", "map_ordered"]
+__all__ = ["DEFAULT_NEURON_WORKERS", "SESSION_POOL_MAXSIZE", "map_ordered"]
 
 #: Neurons in flight when a call is one request per neuron.
 #:
@@ -55,6 +55,22 @@ __all__ = ["DEFAULT_NEURON_WORKERS", "map_ordered"]
 #: over their own clients' sessions, and want a number chosen from what the service
 #: will answer quickly, not from how many sockets are retained.
 DEFAULT_NEURON_WORKERS = 8
+
+
+#: Connections a client's session may retain per host, where connecto gets to say.
+#:
+#: A ceiling on *retained idle* connections, not on concurrency: urllib3 opens them
+#: lazily, so headroom costs nothing until it is used. Running out is what costs -
+#: the pool discards the connection it cannot keep, logs "Connection pool is full",
+#: and the next read pays a fresh TLS handshake, so the fan-out is charged for and
+#: then spent on setup.
+#:
+#: 128 because the routes above put up to two requests per neuron on one host, so
+#: the shipped default needs 16 and a caller tuning ``max_workers=64`` needs all of
+#: it. See ``connecto.precomputed.limits.POOL_MAXSIZE`` for the same argument on
+#: connecto's own session, which is sized larger because mesh fragments fan out
+#: wider still.
+SESSION_POOL_MAXSIZE = 128
 
 
 def map_ordered(

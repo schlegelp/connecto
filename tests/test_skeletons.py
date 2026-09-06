@@ -410,3 +410,59 @@ def test_l2_info_honours_max_workers(monkeypatch):
     threads.clear()
     l2_mod.L2(ds).info(list(range(6)), progress=False, max_workers=4)
     assert len(threads) > 1
+
+
+# ------------------------------------------------------- the CAVE session pool
+
+
+def test_cave_session_pool_is_raised_without_clobbering_other_defaults(monkeypatch):
+    """Enough retained connections for the fan-out, and nothing else disturbed.
+
+    caveclient gives each sub-client its own session capped at 10-20 connections,
+    which a per-neuron fan-out overruns immediately: urllib3 then discards the
+    connection it cannot keep and re-handshakes on the next read. Measured on aedes,
+    `l2.skeleton(max_workers=32)` logged 28 "Connection pool is full" warnings at 20
+    and none at 128.
+
+    The second half of the assertion is the fiddly bit: `set_session_defaults`
+    assigns *every* field from its arguments, so passing only `pool_maxsize` would
+    silently reset a caller's retry policy and backoff to caveclient's own defaults.
+    """
+    import inspect
+
+    import caveclient
+
+    from connecto.backends.cave import dataset as cave_ds
+    from connecto.core.parallel import SESSION_POOL_MAXSIZE
+
+    state = {
+        "max_retries": 5, "pool_block": False, "pool_maxsize": 20,
+        "backoff_factor": 0.2, "backoff_max": 120, "status_forcelist": (502, 503),
+    }
+
+    # The stand-in is built from the real signature rather than hand-written, so it
+    # reproduces the part that matters: an argument left out is not left alone, it is
+    # reset to caveclient's default. A forgiving fake here would pass a naive
+    # `set_session_defaults(pool_maxsize=...)`, which is the whole thing under test.
+    signature = inspect.signature(caveclient.set_session_defaults)
+
+    def set_defaults(**kwargs):
+        bound = signature.bind(**kwargs)
+        bound.apply_defaults()
+        state.clear()
+        state.update(bound.arguments)
+
+    monkeypatch.setattr(caveclient, "get_session_defaults", lambda: dict(state))
+    monkeypatch.setattr(caveclient, "set_session_defaults", set_defaults)
+
+    cave_ds._widen_session_pool()
+
+    assert state["pool_maxsize"] == SESSION_POOL_MAXSIZE
+    assert state["max_retries"] == 5, "clobbered the caller's retry policy"
+    assert state["backoff_factor"] == 0.2, "clobbered the caller's backoff"
+    assert state["status_forcelist"] == (502, 503)
+
+    # A caller who already asked for more keeps it - this raises, never lowers.
+    state["pool_maxsize"] = SESSION_POOL_MAXSIZE * 2
+    cave_ds._widen_session_pool()
+    assert state["pool_maxsize"] == SESSION_POOL_MAXSIZE * 2
