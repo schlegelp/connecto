@@ -24,6 +24,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ..servers import server_errors
+from .limits import POOL_MAXSIZE
 
 __all__ = ["Store", "is_graphene", "normalize_url", "split_protocol", "decompress"]
 
@@ -93,9 +94,16 @@ def decompress(data: bytes, encoding: str | None) -> bytes:
 
 @functools.cache
 def _default_session() -> requests.Session:
-    """The anonymous session every public bucket read shares."""
+    """The anonymous session every public bucket read shares.
+
+    ``pool_maxsize`` is a ceiling on live connections to one host, and it is derived
+    from the mesh fan-out rather than picked - see :mod:`connecto.precomputed.limits`
+    for what happens when it is the smaller of the two.
+    """
     sess = requests.Session()
-    adapter = HTTPAdapter(max_retries=_RETRY, pool_maxsize=64, pool_connections=16)
+    adapter = HTTPAdapter(
+        max_retries=_RETRY, pool_maxsize=POOL_MAXSIZE, pool_connections=16
+    )
     sess.mount("https://", adapter)
     sess.mount("http://", adapter)
     return sess

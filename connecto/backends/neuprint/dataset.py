@@ -291,12 +291,30 @@ class NeuPrintDataset(Dataset):
         ``lod=1`` by default, not 0. These are deep octrees and level 0 is the
         full-resolution surface: one hemibrain neuron at level 0 is 36 million
         vertices, which is not what somebody asking for "the mesh" wants.
+
+        ``**opts`` reaches :func:`~connecto.core.volume.fetch_meshes`, so
+        ``max_workers=`` and ``parallel=`` tune this door exactly as they tune the
+        CAVE one. They used to be swallowed here, which made the same keyword work
+        on FlyWire-via-CAVE and do nothing at all on FlyWire-via-neuPrint.
         """
         from ...core.volume import fetch_meshes
 
         source = self._segmentation_source()
         if source is None:
-            # No published volume: fall back to whatever navis can find.
+            # No published volume: fall back to whatever navis can find. navis has
+            # no notion of connecto's fetch options, so passing them on would be a
+            # TypeError from inside somebody else's library; say so here instead,
+            # and say where the keyword *does* work - `parallel=` is real on every
+            # other mesh route, so "not supported" alone would read as a connecto
+            # limitation rather than as a property of this one fallback.
+            if opts:
+                raise TypeError(
+                    f"{self.label} publishes no mesh volume, so its meshes come from "
+                    f"navis, which takes none of {sorted(opts)} - only `lod` and "
+                    f"`progress` mean anything here. A dataset with a precomputed "
+                    f"mesh bucket, or the same dataset through a CAVE door, takes "
+                    f"`max_workers` and `parallel`."
+                )
             import navis.interfaces.neuprint as neu
 
             neurons = neu.fetch_mesh_neuron(
@@ -310,7 +328,8 @@ class NeuPrintDataset(Dataset):
             return
 
         yield from fetch_meshes(
-            self, ids, source=source, lod=1 if lod is None else lod, progress=progress
+            self, ids, source=source, lod=1 if lod is None else lod,
+            progress=progress, **opts,
         )
 
     # --------------------------------------------------------------------- somas

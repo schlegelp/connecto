@@ -19,11 +19,13 @@ Spec: https://github.com/google/neuroglancer/blob/master/src/datasource/precompu
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
 
 from ..exceptions import MissingDependencyError
+from .limits import DEFAULT_MESH_PARALLEL, decode_workers
 from .sharding import ShardingSpec, ShardReader
 from .store import Store
 
@@ -164,9 +166,13 @@ def _to_model_space(vertices, manifest, lod, frag, quantization_bits):
 class MultiResMeshSource:
     """``neuroglancer_multilod_draco``, sharded or one file per object."""
 
-    def __init__(self, store: Store, info: dict):
+    def __init__(self, store: Store, info: dict, parallel: int | None = None):
         self.store = store
         self.info = info
+        # Decode workers, not download workers - see `get`. `None` defers to
+        # `limits.decode_workers()`, which cannot be settled at import time because
+        # it depends on which DracoPy is installed.
+        self.parallel = parallel
         self.transform = info.get("transform")
         self.quantization_bits = int(info.get("vertex_quantization_bits", 16))
         spec = info.get("sharding")
@@ -198,7 +204,17 @@ class MultiResMeshSource:
             return None, None, None
         return MultiResManifest.from_binary(raw), f"{int(segid)}", 0
 
-    def get(self, segid: int, lod: int = 0):
+    def get(self, segid: int, lod: int = 0, parallel: int | None = None):
+        """One object's mesh, at one level of detail.
+
+        ``parallel`` buys something different here than on the other two sources. A
+        whole LOD is one contiguous byte range, so there is exactly one request to
+        make and no downloading to spread out - but that range holds dozens of
+        independently draco-encoded fragments, and those can decode in parallel.
+        Whether that is worth doing depends on the installed decoder, so the default
+        comes from :func:`~connecto.precomputed.limits.decode_workers`; at one
+        worker this runs the plain serial loop rather than a pool of one.
+        """
         segid = int(segid)
         manifest, filename, origin = self._manifest_and_data_origin(segid)
         if manifest is None:
@@ -221,18 +237,34 @@ class MultiResMeshSource:
             raise KeyError(f"Mesh fragments for segment {segid} are missing.")
 
         sizes = manifest.fragment_offsets[lod]
-        pieces, cursor = [], 0
+        fragments, cursor = [], 0
         for frag in range(len(sizes)):
             size = int(sizes[frag])
             piece = blob[cursor : cursor + size]
             cursor += size
             # An empty fragment is legal: a child exists at a finer level but this
             # level has nothing there, which marching cubes run per-level produces.
-            if size == 0:
-                continue
+            if size:
+                fragments.append((frag, piece))
+
+        def decode(item):
+            frag, piece = item
             v, f = _decode_draco(piece)
             v = _to_model_space(v, manifest, lod, frag, self.quantization_bits)
-            pieces.append((_apply_transform(v, self.transform), f))
+            return _apply_transform(v, self.transform), f
+
+        budget = self.parallel if parallel is None else int(parallel)
+        if budget is None:
+            budget = decode_workers()
+        workers = max(1, min(budget, len(fragments) or 1))
+
+        if workers == 1:
+            # Not a one-worker pool: on a GIL-holding DracoPy that is the common
+            # case, and it should cost exactly what the plain loop costs.
+            pieces = [decode(item) for item in fragments]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                pieces = list(pool.map(decode, fragments))
 
         return _build(*_join(pieces))
 
@@ -240,10 +272,14 @@ class MultiResMeshSource:
 class LegacyMeshSource:
     """``neuroglancer_legacy_mesh``: a JSON manifest naming raw fragments."""
 
-    def __init__(self, store: Store, info: dict | None = None):
+    def __init__(
+        self, store: Store, info: dict | None = None,
+        parallel: int = DEFAULT_MESH_PARALLEL,
+    ):
         self.store = store
         self.info = info or {}
         self.transform = (self.info or {}).get("transform")
+        self.parallel = parallel
 
     def _fragments(self, segid: int) -> list:
         raw = self.store.get(f"{int(segid)}:0")
@@ -251,19 +287,30 @@ class LegacyMeshSource:
             return []
         return json.loads(raw).get("fragments", [])
 
-    def get(self, segid: int, lod: int = 0):
+    def get(self, segid: int, lod: int = 0, parallel: int | None = None):
+        """One object's mesh. ``lod`` is accepted and ignored - this format has none.
+
+        The fragments are separate objects, so they are fetched concurrently - see
+        :data:`~connecto.precomputed.limits.DEFAULT_MESH_PARALLEL`. Decoding stays on
+        this thread, which loses nothing: it is numpy on bytes already in hand, and
+        it holds the GIL either way.
+        """
         segid = int(segid)
         fragments = self._fragments(segid)
         if not fragments:
             raise KeyError(f"No mesh for segment {segid} in {self.store.url}.")
 
-        pieces = []
-        for name in fragments:
-            blob = self.store.get(name)
-            if blob is None:
-                continue
-            v, f = decode_legacy_fragment(blob)
-            pieces.append((_apply_transform(v, self.transform), f))
+        budget = self.parallel if parallel is None else int(parallel)
+        workers = max(1, min(budget, len(fragments)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            blobs = pool.map(self.store.get, fragments)
+
+            pieces = []
+            for blob in blobs:
+                if blob is None:
+                    continue
+                v, f = decode_legacy_fragment(blob)
+                pieces.append((_apply_transform(v, self.transform), f))
 
         return _build(*_join(pieces))
 

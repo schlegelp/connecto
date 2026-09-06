@@ -61,7 +61,13 @@ __all__ = [
 
 
 class _BaseVolume:
-    """What both volume kinds have in common."""
+    """What both volume kinds have in common.
+
+    ``parallel`` here sizes *image* chunk reads only. Meshes fan out much wider and
+    are tuned per call - ``vol.mesh.get(segid, parallel=...)`` - because volumes are
+    cached per source (``core.volume.get_volume``) and ``mesh`` is a cached property,
+    so a number fixed at construction would be fixed for the process.
+    """
 
     meta: PrecomputedMeta
     image: ImageSource

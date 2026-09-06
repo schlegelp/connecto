@@ -14,6 +14,7 @@ the format, as opposed to a mistake in implementing what we understood.
 from __future__ import annotations
 
 import gzip
+import warnings
 
 import numpy as np
 import pytest
@@ -639,6 +640,208 @@ def test_a_missing_mesh_raises_rather_than_returning_an_empty_one(cv):
     mine, _ = _both(HEMIBRAIN, 0)
     with pytest.raises(KeyError):
         mine.mesh.get(1, lod=0)
+
+
+# ----------------------------------------------------------------- fan-out limits
+
+
+def test_pool_ceiling_covers_the_mesh_fan_out():
+    """The connection pool must hold what the default mesh fan-out asks for.
+
+    These three numbers are one decision split across two modules, and breaking the
+    relationship does not fail: urllib3 discards the connections it cannot keep and
+    pays a fresh TLS handshake per read, which reads as a slow network rather than as
+    a bug. That is what this asserts, and it is why `POOL_MAXSIZE` is derived.
+    """
+    from connecto.precomputed import limits
+    from connecto.precomputed.store import _default_session
+
+    assert limits.POOL_MAXSIZE >= limits.DEFAULT_MESH_WORKERS * limits.DEFAULT_MESH_PARALLEL
+
+    # The defaults were never the case that would break it - a maintainer changes
+    # those deliberately. A caller tuning `meshes.get(max_workers=8, parallel=64)` is,
+    # and has no way to raise the ceiling themselves, so it has to cover them too.
+    assert limits.POOL_MAXSIZE >= 8 * 64
+
+    # And the session actually built from it agrees - the constant is not decorative.
+    adapter = _default_session().get_adapter("https://storage.googleapis.com")
+    assert adapter._pool_maxsize == limits.POOL_MAXSIZE
+
+
+@pytest.mark.parametrize(
+    ("version", "threaded"),
+    [("1.7.0", False), ("1.4.0", False), ("2.0.0", True), ("2.1.3", True), ("weird", False)],
+)
+def test_decode_workers_follows_the_installed_dracopy(version, threaded, monkeypatch):
+    """Decode threads only where decoding can actually overlap.
+
+    DracoPy holds the GIL through `decode` until 2.0, where pointing threads at it
+    costs ~6% and gains nothing. connecto declares `DracoPy>=1.4.0`, so that is most
+    installs, and they must come out at 1 - which `MultiResMeshSource.get` turns into
+    the plain serial loop rather than a pool of one.
+    """
+    from connecto.precomputed import limits
+
+    monkeypatch.setattr(limits.importlib.metadata, "version", lambda _: version)
+    limits.decode_workers.cache_clear()
+    try:
+        assert (limits.decode_workers() > 1) is threaded
+    finally:
+        limits.decode_workers.cache_clear()
+
+
+# ------------------------------------------------------------------- seam welding
+
+
+def _dedup_reference(vertices, faces, is_chunk_aligned):
+    """The straightforward reading of the seam-welding rule, done with `np.unique`.
+
+    Kept as the yardstick for the fast path in `graphene_mesh`, which reaches the
+    same answer by folding each row into one integer and renumbering through a lookup
+    table. This is the version that is obviously correct; that one is the quick one.
+    """
+    _, inverse, counts = np.unique(
+        vertices, return_inverse=True, return_counts=True, axis=0
+    )
+    inverse = np.asarray(inverse).reshape(-1)
+    doubled = np.isin(inverse, np.flatnonzero(counts == 2))
+    merge = doubled & np.asarray(is_chunk_aligned, dtype=bool)
+    key = np.where(merge, inverse, np.arange(len(vertices), dtype=np.int64) + len(counts))
+    corners = faces.reshape(-1)
+    _, first, new_faces = np.unique(
+        key[corners], return_index=True, return_inverse=True
+    )
+    return vertices[corners[first]], np.asarray(new_faces).reshape(-1, 3)
+
+
+def test_deduplicate_vertices_welds_only_aligned_pairs():
+    """The rule itself, on a case small enough to read.
+
+    Rows 0 and 1 are the same coordinate, both on a boundary: one seam, welded.
+    Rows 2-4 are the same coordinate three times over - a real feature of the
+    surface, not a seam - and must survive whatever their flags say. Rows 5 and 6
+    are a duplicate pair with only one of them on a boundary, which is not a seam
+    either: a fragment's interior vertex that happens to coincide with its
+    neighbour's edge is not evidence that the two edges are the same edge.
+    """
+    from connecto.precomputed.graphene_mesh import _deduplicate_vertices
+
+    vertices = np.array(
+        [[0.0, 0, 0], [0.0, 0, 0],           # aligned pair      -> welded
+         [1.0, 0, 0], [1.0, 0, 0], [1.0, 0, 0],  # tripled        -> kept apart
+         [2.0, 0, 0], [2.0, 0, 0]],          # half-aligned pair -> kept apart
+        dtype="float64",
+    )
+    aligned = np.array([True, True, True, True, True, True, False])
+    faces = np.array([[0, 2, 5], [1, 3, 6], [4, 5, 6]], dtype="int64")
+
+    verts, out_faces = _deduplicate_vertices(vertices, faces, aligned)
+
+    # 7 vertices in, one pair fused, so 6 out - and the tripled coordinate is still
+    # three separate vertices.
+    assert len(verts) == 6
+    assert (verts == [1.0, 0, 0]).all(axis=1).sum() == 3
+    assert (verts == [2.0, 0, 0]).all(axis=1).sum() == 2
+    # Corners 0 and 1 named different rows of `vertices` and now name one vertex.
+    assert out_faces[0, 0] == out_faces[1, 0]
+    # The surface is unchanged: every corner still sits where it did.
+    assert np.array_equal(verts[out_faces], vertices[faces])
+
+
+@pytest.mark.parametrize("seed", range(8))
+@pytest.mark.parametrize("integral", [True, False], ids=["packed", "lexsort-fallback"])
+def test_deduplicate_vertices_matches_reference(seed, integral):
+    """The fast path and the obvious path agree, exactly, on messy input.
+
+    Random rather than fixed because the interesting cases are combinations - a
+    coordinate group of the wrong size, a group split across the aligned flag, a
+    vertex no face names - and enumerating them by hand is how you miss one. Small
+    coordinate range so duplicates are common, and unused vertices so the
+    drop-what-the-faces-never-name path is exercised too.
+
+    Run twice over: whole-number coordinates take the packed-integer sort, halves
+    cannot be packed and fall back to `lexsort`. Both have to be exact, and the
+    fallback is the one no real dataset exercises - so if it is ever wrong, this is
+    the only place that would say so.
+    """
+    from connecto.precomputed.graphene_mesh import (
+        _deduplicate_vertices,
+        _packed_row_key,
+    )
+
+    rng = np.random.default_rng(seed)
+    vertices = rng.integers(0, 12, size=(200, 3)).astype("float64")
+    if not integral:
+        vertices = vertices / 2
+    aligned = rng.random(200) < 0.5
+    faces = rng.integers(0, 200, size=(120, 3)).astype("int64")
+
+    assert (_packed_row_key(vertices) is not None) is integral
+
+    got_v, got_f = _deduplicate_vertices(vertices, faces, aligned)
+    want_v, want_f = _dedup_reference(vertices, faces, aligned)
+
+    assert np.array_equal(got_v, want_v)
+    assert np.array_equal(got_f, want_f)
+    # Whatever the renumbering did, it did not move the surface.
+    assert np.array_equal(got_v[got_f], vertices[faces])
+
+
+@pytest.mark.parametrize(
+    ("why", "vertices"),
+    [
+        ("no rows at all", np.zeros((0, 3))),
+        ("fractional", [[0.5, 0, 0], [1, 2, 3]]),
+        ("nan", [[float("nan"), 0, 0], [1, 2, 3]]),
+        ("inf", [[float("inf"), 0, 0], [1, 2, 3]]),
+        ("too wide to pack", [[0, 0, 0], [2.0**40, 2.0**40, 2.0**40]]),
+        ("past int64", [[0, 0, 0], [2.0**63, 0, 0]]),
+    ],
+)
+def test_packed_row_key_declines_what_it_cannot_represent(why, vertices):
+    """Every input the packing cannot hold exactly must be refused, not approximated.
+
+    Fractional coordinates are the one that would silently corrupt: casting them to
+    integers would make two distinct vertices compare equal and weld a seam that is
+    not there. The rest are refused before the cast, because `astype(int64)` of a
+    NaN or of something past the integer range is undefined - numpy warns and hands
+    back a sentinel - so `filterwarnings("error")` is part of the assertion.
+    """
+    from connecto.precomputed.graphene_mesh import _packed_row_key
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _packed_row_key(np.array(vertices, dtype="float64")) is None
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_packed_row_key_orders_exactly_like_lexsort(seed):
+    """The property the swap rests on: same order, so the output does not move.
+
+    Packing x into the high bits makes an integer sort reproduce the coordinate
+    order `lexsort` gives. If that ever stops holding the meshes stay correct but
+    every vertex is renumbered, which is the kind of change that surfaces as a
+    confusing diff somewhere downstream rather than as a failure here.
+    """
+    from connecto.precomputed.graphene_mesh import _packed_row_key
+
+    rng = np.random.default_rng(seed)
+    vertices = rng.integers(-500, 500, size=(1000, 3)).astype("float64")
+
+    packed = np.argsort(_packed_row_key(vertices), kind="stable")
+    lex = np.lexsort((vertices[:, 2], vertices[:, 1], vertices[:, 0]))
+    assert np.array_equal(vertices[packed], vertices[lex])
+
+
+def test_deduplicate_vertices_empty():
+    """An all-empty fragment set must not IndexError on `starts[0]`."""
+    from connecto.precomputed.graphene_mesh import _deduplicate_vertices
+
+    verts, faces = _deduplicate_vertices(
+        np.zeros((0, 3)), np.zeros((0, 3), dtype="int64"), np.zeros(0, dtype=bool)
+    )
+    assert verts.shape == (0, 3)
+    assert faces.shape == (0, 3)
 
 
 @pytest.mark.network

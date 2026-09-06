@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 from ..precomputed import Bbox, Volume, is_graphene
+from ..precomputed.limits import DEFAULT_MESH_WORKERS
 
 __all__ = [
     "GSPointLoader",
@@ -284,7 +285,8 @@ def fetch_meshes(
     source: str | None = None,
     lod=None,
     progress: bool = True,
-    max_workers: int = 4,
+    max_workers: int = DEFAULT_MESH_WORKERS,
+    parallel: int | None = None,
 ):
     """Yield ``(id, trimesh.Trimesh)`` for each segment, in the order asked for.
 
@@ -292,9 +294,13 @@ def fetch_meshes(
     came in by: a flat multi-resolution bucket and a chunkedgraph's meshing service
     both answer :meth:`mesh.get` and both hand back a ``Trimesh``.
 
-    Threaded, because a mesh is a handful of sequential HTTPS GETs (shard index,
-    manifest, fragments) and fetching one neuron at a time leaves the link idle for
-    most of the wall clock.
+    Two pools, and they are not interchangeable. ``max_workers`` is neurons in
+    flight here. ``parallel`` goes down to the mesh source and means "how many at
+    once" for whatever that source can actually spread - fragment *reads* on a
+    chunkedgraph or a legacy manifest, fragment *decodes* on a multi-resolution
+    bucket, which has only one read to make. ``None`` leaves each on its own default,
+    and those differ by an order of magnitude for exactly that reason; see
+    :mod:`connecto.precomputed.limits`.
     """
     from tqdm.auto import tqdm
 
@@ -304,6 +310,8 @@ def fetch_meshes(
     # detail - the graph layer sets the resolution - and the number would end up in
     # the manifest URL, asking the service for something that does not exist.
     kwargs = {} if lod is None else {"lod": int(lod)}
+    if parallel is not None:
+        kwargs["parallel"] = int(parallel)
 
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(ids) or 1))) as pool:
         meshes = pool.map(lambda i: vol.mesh.get(i, **kwargs), ids)

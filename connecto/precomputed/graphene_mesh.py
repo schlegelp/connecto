@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 
@@ -28,11 +29,58 @@ import numpy as np
 
 from ..exceptions import MissingDependencyError
 from .graphene import GrapheneMeta
+from .limits import DEFAULT_MESH_PARALLEL
 from .mesh import _build, _decode_draco, _join, decode_legacy_fragment
 from .sharding import ShardingSpec, ShardReader
 from .store import Store
 
 __all__ = ["GrapheneMeshSource"]
+
+
+def _packed_row_key(vertices: np.ndarray):
+    """One integer per row that sorts exactly as the row does, or None.
+
+    Mesh coordinates arrive on a lattice - draco quantises, and these fragments
+    decode to whole nanometres - so the three columns can be folded into a single
+    index of the box they span, x-major. That makes an ordinary integer sort
+    reproduce the order a ``lexsort`` of the three columns gives, which is why this
+    can be swapped in without moving a single vertex in the output.
+
+    It is a *packing*, not a hash: the map is injective, so distinct coordinates
+    cannot collide and no seam can be missed. A hash of comparable cost would leave
+    a ~1e-8 chance per mesh of a silently unwelded seam, which is not a trade worth
+    taking for a hairline crack nobody would ever trace back to here.
+
+    ``None`` where the assumption fails - no rows, coordinates off the lattice, or a
+    box too large to index - and the caller falls back to ``np.unique(axis=0)``.
+    Nothing measures how often that happens, so the fallback has to stay correct
+    rather than merely rare.
+    """
+    if not len(vertices):
+        return None
+
+    # Per column, not `min(axis=0)`. Reducing along the length-3 axis of an (N, 3)
+    # array leaves numpy an inner loop of three, which it does not vectorise: 23 ms
+    # against 2 ms for the six scalar reductions, on a 1.4M-vertex neuron.
+    lo = np.array([vertices[:, c].min() for c in range(3)])
+    hi = np.array([vertices[:, c].max() for c in range(3)])
+
+    # Guard the cast before making it: `astype(int64)` of something past the integer
+    # range is undefined, and numpy warns rather than answering. NaN and inf fail
+    # this comparison too, so it doubles as the finiteness check.
+    if not np.all(np.maximum(np.abs(lo), np.abs(hi)) < 2.0**62):
+        return None
+
+    packed = vertices.astype(np.int64)
+    if not np.array_equal(packed, vertices):
+        return None  # fractional coordinates: the cast would fuse distinct vertices
+
+    packed -= lo.astype(np.int64)
+    dims = [int(d) for d in (hi - lo).astype(np.int64) + 1]
+    if math.prod(dims) > np.iinfo(np.intp).max:
+        return None  # `ravel_multi_index` would refuse; ask it nothing it can't do
+
+    return np.ravel_multi_index(tuple(packed.T), tuple(dims))
 
 
 def _deduplicate_vertices(vertices: np.ndarray, faces: np.ndarray, is_chunk_aligned):
@@ -43,27 +91,65 @@ def _deduplicate_vertices(vertices: np.ndarray, faces: np.ndarray, is_chunk_alig
     surface, not a seam, and merging it would weld unrelated geometry together.
 
     The merge is expressed as an integer key per vertex - shared where two vertices
-    are to be fused, unique otherwise - so the deduplication is a 1-D ``np.unique``.
-    Doing it on the coordinates themselves means lexsorting a ``(3 x faces, 4)``
-    float array, which for a million-vertex neuron is a 150 MB temporary and several
-    seconds.
+    are to be fused, unique otherwise - so the fusing itself is integer bookkeeping.
+    Both halves avoid a sort that numpy would otherwise do the slow way; on a
+    1.4M-vertex mosquito neuron the two together are ~4.5x faster than the
+    ``np.unique`` pair they replace, and return the identical arrays.
+
+    Grouping identical coordinates is ``np.unique`` over :func:`_packed_row_key`
+    rather than over the rows. ``np.unique(axis=0)`` gets its answer by viewing each
+    row as one structured scalar and sorting *those* - a generic element-by-element
+    comparator, called a few tens of millions of times. Given one integer per row it
+    is an ordinary numeric sort instead: 0.90 s -> 0.06 s, of which a ``lexsort`` of
+    the three float columns would still have cost 0.18 s.
+
+    Renumbering is a lookup table, not a second ``np.unique``, because the keys are
+    already integers with a known bound - one slot per coordinate group plus one per
+    vertex - so "which distinct keys are used, and in what order" is a scatter and a
+    ``flatnonzero`` rather than a sort of three million face corners: 0.4 s -> 0.06 s.
     """
-    _, inverse, counts = np.unique(
-        vertices, return_inverse=True, return_counts=True, axis=0
-    )
+    n = len(vertices)
+    if n == 0:
+        return vertices, faces
+
+    # --- group identical coordinates -> `inverse` (group per vertex) and `counts`
+    key = _packed_row_key(vertices)
+    if key is None:
+        _, inverse, counts = np.unique(
+            vertices, axis=0, return_inverse=True, return_counts=True
+        )
+    else:
+        _, inverse, counts = np.unique(key, return_inverse=True, return_counts=True)
     inverse = np.asarray(inverse).reshape(-1)
-    doubled = np.isin(inverse, np.flatnonzero(counts == 2))
-    merge = doubled & np.asarray(is_chunk_aligned, dtype=bool)
+
+    # `counts[inverse]`, not `np.isin(inverse, flatnonzero(counts == 2))`: the group
+    # size is one gather away, and asking `isin` for it re-sorts to answer a question
+    # already indexed by group id.
+    merge = (counts[inverse] == 2) & np.asarray(is_chunk_aligned, dtype=bool)
 
     # Fusing pairs share their coordinate's id; everyone else gets an id of their
     # own, offset past the coordinate ids so the two ranges cannot collide.
-    key = np.where(merge, inverse, np.arange(len(vertices), dtype=np.int64) + len(counts))
+    n_groups = len(counts)
+    key = np.where(merge, inverse, np.arange(n, dtype=np.intp) + n_groups)
 
+    # --- renumber: keep one vertex per distinct key, drop any the faces never name
     corners = faces.reshape(-1)
-    _, first, new_faces = np.unique(
-        key[corners], return_index=True, return_inverse=True
-    )
-    return vertices[corners[first]], np.asarray(new_faces).reshape(-1, 3)
+    corner_keys = key[corners]
+
+    # One table, used for two things in turn. First it holds, per key, some vertex
+    # bearing it - and *which* vertex does not matter, because two vertices share a
+    # key only if they were fused, and they were fused only for having identical
+    # coordinates. So an unordered scatter is enough; there is no need to hunt for a
+    # first occurrence. `-1` marks the keys no face names, which are then dropped.
+    slot = np.full(n_groups + n, -1, dtype=np.intp)
+    slot[corner_keys] = corners
+    kept = np.flatnonzero(slot >= 0)  # ascending, so: the distinct keys, in order
+    out_vertices = vertices[slot[kept]]
+
+    # Now the same slots become the key -> output-index map, which is the only thing
+    # still wanted from them.
+    slot[kept] = np.arange(len(kept), dtype=np.intp)
+    return out_vertices, slot[corner_keys].reshape(-1, 3)
 
 
 # e.g. ~2/344239114-0.shard:224659:442
@@ -82,9 +168,18 @@ class _GrapheneShardReader(ShardReader):
 
 
 class GrapheneMeshSource:
-    """Meshes for a chunkedgraph datastack."""
+    """Meshes for a chunkedgraph datastack.
 
-    def __init__(self, meta: GrapheneMeta, session=None, parallel: int = 8):
+    ``parallel`` - fragment reads in flight - is the single biggest lever on how
+    long a mesh takes here; see
+    :data:`~connecto.precomputed.limits.DEFAULT_MESH_PARALLEL` for the measurements
+    behind its default.
+    """
+
+    def __init__(
+        self, meta: GrapheneMeta, session=None,
+        parallel: int = DEFAULT_MESH_PARALLEL,
+    ):
         self.meta = meta
         # `session` talks to the CAVE server, and only to it. The bucket is public,
         # and handing Google Storage a CAVE bearer token makes it try, and fail, to
@@ -183,8 +278,33 @@ class GrapheneMeshSource:
             except Exception:
                 return None
 
-    def get(self, segid: int, lod: int = 0):
-        """One neuron's mesh, in nanometres."""
+    def _read_fragment(self, read):
+        """One fragment, start to finish, on a worker thread.
+
+        Decoding runs here rather than back on the calling thread because draco
+        decoding is the one part of this that a thread can genuinely overlap: recent
+        DracoPy releases the GIL for it, which turns ~120 ms of serial decode for a
+        big neuron into ~45 ms across the pool. Where it does not (before 2.0), this
+        arrangement is still no worse - the work has to happen on some thread, and
+        doing it here at least overlaps it with the reads still in flight.
+
+        Chunk-boundary marking comes along for the ride: it is numpy, so it holds the
+        GIL and parallelises poorly, but it needs the fragment's own label and doing
+        it here saves carrying labels back out.
+        """
+        fn, args, label = read
+        decoded = self._decode(fn(*args))
+        if decoded is None:
+            return None
+        return decoded, self._chunk_aligned(decoded[0], label) if self.sharded else None
+
+    def get(self, segid: int, lod: int = 0, parallel: int | None = None):
+        """One neuron's mesh, in nanometres.
+
+        ``parallel`` overrides the source's own setting for this call - useful
+        because volumes are cached per source, so the constructor's value is fixed
+        once the first read has happened.
+        """
         segid = int(segid)
         initial, dynamic, unresolved = self._classify(self.fetch_manifest(segid, lod))
 
@@ -203,18 +323,14 @@ class GrapheneMeshSource:
                 f"It may not be meshed yet."
             )
 
-        workers = max(1, min(self.parallel, len(reads)))
+        budget = self.parallel if parallel is None else int(parallel)
+        workers = max(1, min(budget, len(reads)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            blobs = pool.map(lambda read: read[0](*read[1]), reads)
+            fetched = pool.map(self._read_fragment, reads)
+            done = [piece for piece in fetched if piece is not None]
 
-            pieces, masks = [], []
-            for blob, (_, _, label) in zip(blobs, reads):
-                decoded = self._decode(blob)
-                if decoded is None:
-                    continue
-                pieces.append(decoded)
-                if self.sharded:
-                    masks.append(self._chunk_aligned(decoded[0], label))
+        pieces = [decoded for decoded, _ in done]
+        masks = [mask for _, mask in done if mask is not None]
 
         if not pieces:
             raise KeyError(f"No decodable mesh fragments for segment {segid}.")
@@ -261,7 +377,8 @@ class GrapheneMeshSource:
         behind = np.mod(vertices - offset, chunk_size)
         ahead = chunk_size - behind
         # Draco rounds up, so "on the boundary" is within half a grid step of it.
-        return np.any(behind < (grid / 2), axis=1) | np.any(ahead <= (grid / 2), axis=1)
+        half = grid / 2
+        return np.any((behind < half) | (ahead <= half), axis=1)
 
     def _reader_store(self, layer) -> Store:
         """The store holding one layer's static shards."""
