@@ -31,7 +31,7 @@ from ...exceptions import CapabilityError, ConnectoError
 
 logger = logging.getLogger("connecto")
 
-__all__ = ["L2_SKELETON_ATTRIBUTES", "fetch_skeletons", "l2_info", "l2_skeleton"]
+__all__ = ["L2_DEFAULT_ATTRIBUTES", "fetch_skeletons", "l2_info", "l2_skeleton"]
 
 
 def fetch_skeletons(
@@ -238,20 +238,73 @@ def _edges_to_parents(n_nodes: int, edges: np.ndarray, root_node: int = 0) -> np
     return parent
 
 
-#: What a skeleton needs off each chunk: where it is, and how thick it is.
-L2_SKELETON_ATTRIBUTES = ("rep_coord_nm", "size_nm3", "area_nm2")
+#: The attributes every L2 query asks for unless it says otherwise: where each chunk
+#: is, and how thick it is.
+L2_DEFAULT_ATTRIBUTES = ("rep_coord_nm", "size_nm3", "area_nm2")
+
+#: Vector-valued attributes, and the flat columns caveclient splits them into. Any
+#: other attribute is a scalar and passes through untouched; an unlisted vector one
+#: would arrive as a column of lists, which is wrong but visibly so.
+_SPLIT_COLUMNS = {
+    "rep_coord_nm": ("rep_coord_nm_x", "rep_coord_nm_y", "rep_coord_nm_z"),
+    "pca": (
+        "pca_0_x", "pca_0_y", "pca_0_z",
+        "pca_1_x", "pca_1_y", "pca_1_z",
+        "pca_2_x", "pca_2_y", "pca_2_z",
+    ),
+    "pca_val": ("pca_val_0", "pca_val_1", "pca_val_2"),
+}
 
 
-def l2_info(ds, root: int, *, attributes=L2_SKELETON_ATTRIBUTES) -> pd.DataFrame:
-    """Level-2 chunk attributes for one neuron.
+def _split_vector_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten the vector attributes into columns, leaving a missing one as NaN."""
+    out = df.drop(columns=[c for c in _SPLIT_COLUMNS if c in df.columns])
+    for col, names in _SPLIT_COLUMNS.items():
+        if col not in df.columns:
+            continue
+        present = df[col].notna()
+        flat = np.full((len(df), len(names)), np.nan)
+        if present.any():
+            flat[present.to_numpy()] = np.stack(
+                [np.ravel(v) for v in df.loc[present, col]]
+            )
+        out[list(names)] = flat
+    return out
 
-    Note ``split_columns=True`` (caveclient's default): ``rep_coord_nm`` comes back
-    as ``rep_coord_nm_x/_y/_z``, not as a single column of triples.
+
+def l2_info(
+    ds, root: int, *, attributes=L2_DEFAULT_ATTRIBUTES, dropna: bool = False
+) -> pd.DataFrame:
+    """Level-2 chunk attributes for one neuron, one column per component.
+
+    Split here rather than by caveclient, which is the whole point. caveclient fills
+    a *missing* attribute with ``np.empty`` - uninitialised memory - instead of NaN
+    (``l2cache._flatten_pca``, ``_flatten_rep_coord``), so a chunk the cache has no
+    axis or no position for arrives as whatever bytes were lying around. Freshly
+    mapped pages are zero-filled, which is why it usually looks like a zero vector;
+    reused ones are not, and then a chunk with no axis turns up with a norm of 3e-30
+    and is indistinguishable from a real one. A chunk with no *position* is worse: it
+    becomes a skeleton node at a garbage coordinate, and the ``dropna`` that is
+    supposed to catch it never fires, because garbage is not NaN.
+
+    ``split_columns=False`` returns the frame from *before* that step, where a
+    missing attribute is honestly null - 144 of 400 MICrONS chunks have no ``pca``,
+    and this reports exactly 144. So callers can ask ``.notna()`` and get the truth
+    rather than inferring it from the values.
+
+    ``dropna`` drops chunks with no position. Off by default because
+    :func:`l2_skeleton` wants to tell "the cache knows nothing about this neuron"
+    apart from "it has chunks but no coordinates", which are different messages.
     """
     l2_ids = ds.client.chunkedgraph.get_leaves(root, stop_layer=2)
-    return ds.client.l2cache.get_l2data_table(
-        l2_ids.tolist(), attributes=list(attributes), split_columns=True
+    df = _split_vector_columns(
+        ds.client.l2cache.get_l2data_table(
+            l2_ids.tolist(), attributes=list(attributes), split_columns=False
+        )
     )
+    if dropna and "rep_coord_nm_x" in df.columns:
+        df = df.dropna(subset=["rep_coord_nm_x"])
+    return df
 
 
 def l2_skeleton(ds, root: int) -> pd.DataFrame:
@@ -259,12 +312,14 @@ def l2_skeleton(ds, root: int) -> pd.DataFrame:
 
     The chunk graph and the chunk attributes are two independent requests, so they
     go out together: the graph tells us how the chunks connect, the attributes where
-    they are, and neither needs the other's answer. Worth ~1.4x on one neuron, which
-    is the case with no other parallelism to draw on - a single ``l2.skeleton(x)``.
+    they are, and neither needs the other's answer. One goes to a worker and the
+    caller makes the other itself, so this is two requests in flight per neuron -
+    which the fan-out above multiplies. Worth ~1.4x on one neuron, and that is the
+    case with nothing else to overlap with: a single ``l2.skeleton(x)``.
     """
     import networkx as nx
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(l2_info, ds, root)
         edges = ds.client.chunkedgraph.level2_chunk_graph(root)
         info = pending.result()

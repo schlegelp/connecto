@@ -42,10 +42,18 @@ __all__ = ["DEFAULT_NEURON_WORKERS", "map_ordered"]
 #: fragments, which come off a public bucket, most of these routes are somebody's
 #: query service.
 #:
+#: Not quite a flat fan-out, and the one route that isn't should be read off here
+#: rather than discovered: ``l2.skeleton`` and the L2 fallback in ``fetch_skeletons``
+#: put two requests per neuron on the wire, because a chunk graph and its chunk
+#: attributes are independent and go out together. So that route runs at twice this
+#: number - 16 CAVE calls at the default, which is measured and fine (16 wide costs
+#: the same as 8 wide, and the overlap is worth 1.4x on top).
+#:
 #: Not in :mod:`connecto.precomputed.limits` with the mesh budgets, because it is not
-#: coupled to them: those nest inside one another and their product has to stay under
-#: a connection pool, while this one is a flat fan-out over several services, only one
-#: of which is a precomputed bucket at all.
+#: coupled to them: those nest to keep a *connection pool* from overflowing, and
+#: `POOL_MAXSIZE` is derived from their product. These routes go to query services
+#: over their own clients' sessions, and want a number chosen from what the service
+#: will answer quickly, not from how many sockets are retained.
 DEFAULT_NEURON_WORKERS = 8
 
 

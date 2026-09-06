@@ -297,39 +297,116 @@ def test_neuprint_skeletons_refuse_an_unknown_keyword():
 # ---------------------------------------------------------------- the L2 namespace
 
 
-def test_l2_principal_axis_filter_rejects_uninitialised_memory():
-    """A missing pca is garbage bytes, not a zero vector, and must not survive.
+def test_l2_split_preserves_missing_attributes_as_null():
+    """A missing L2 attribute must stay missing, not become uninitialised memory.
 
-    caveclient fills a missing attribute with `np.empty` rather than NaN, so a chunk
-    the L2 cache has no principal axis for arrives as whatever was in memory. Zeros
-    most of the time - which is why the old `norm > 0` test mostly worked - but not
-    always, and a 3e-30 vector passed that test and reached NBLAST as a direction.
-    Unit length is the property only a real axis has.
+    caveclient's own `split_columns=True` fills an absent attribute with `np.empty`
+    rather than NaN, so a chunk the cache has no axis or no position for arrives as
+    whatever bytes were lying around - usually zeros, which is why it looked
+    harmless, sometimes 3e-30, and never the same twice. connecto asks for the
+    unsplit frame and does the flattening itself so that null stays null; downstream
+    then reads missingness off `.notna()` instead of guessing from the values.
     """
-    from connecto.backends.cave.l2 import _has_principal_axis
+    from connecto.backends.cave.skeletons import _split_vector_columns
 
-    unit = np.array([[1.0, 0, 0], [0, 0.6, 0.8], [-0.577350, 0.577350, 0.577350]])
-    junk = np.array([
-        [0.0, 0, 0],                       # zero-filled page: the common case
-        [2.914e-30, 0, 0],                 # reused page: the one that got through
-        [1e12, -3e11, 7e10],               # arbitrary large garbage
-        [0.5, 0.5, 0.5],                   # plausible-looking but not unit length
-    ])
+    raw = pd.DataFrame(
+        {
+            "size_nm3": [10.0, 20.0, 30.0],
+            "rep_coord_nm": [[1, 2, 3], [4, 5, 6], np.nan],
+            "pca": [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], np.nan, np.nan],
+        },
+        index=pd.Index([11, 22, 33], name="l2_id"),
+    )
 
-    assert _has_principal_axis(unit).all()
-    assert not _has_principal_axis(junk).any()
+    out = _split_vector_columns(raw)
 
-    # float32 storage rounds a unit vector slightly; that must still count.
-    assert _has_principal_axis(unit.astype("float32").astype("float64")).all()
+    # Scalars pass through; vectors become one column per component.
+    assert list(out["size_nm3"]) == [10.0, 20.0, 30.0]
+    assert list(out["rep_coord_nm_x"][:2]) == [1.0, 4.0]
+    assert out["pca_0_x"].iloc[0] == 1.0
+
+    # And the rows the cache had nothing for are null - not zero, not garbage.
+    assert out["rep_coord_nm_x"].isna().tolist() == [False, False, True]
+    assert out["pca_0_x"].isna().tolist() == [False, True, True]
+    # The unsplit columns are gone, so nothing can read the raw lists by accident.
+    assert "pca" not in out.columns and "rep_coord_nm" not in out.columns
 
 
-def test_l2_namespace_methods_take_progress_and_max_workers():
-    """All four fan out per neuron, so all four expose the same two knobs."""
-    import inspect
+def test_l2_info_asks_for_the_unsplit_frame():
+    """It must be connecto that flattens, not caveclient.
 
-    from connecto.backends.cave.l2 import L2
+    The fake below honours `split_columns` the way caveclient does: asked to split,
+    it fills a missing attribute with a number (uninitialised memory in the real
+    thing, zeros here); asked not to, it hands back nulls. So a NaN in the result is
+    proof `l2_info` took the second route. Splitting the already-split frame would
+    be a no-op and the garbage would flow straight through, which is exactly the
+    edit this guards against.
+    """
+    from connecto.backends.cave.skeletons import l2_info
 
-    for name in ("info", "graph", "skeleton", "dotprops"):
-        params = inspect.signature(getattr(L2, name)).parameters
-        assert "progress" in params, f"L2.{name} has no progress bar"
-        assert "max_workers" in params, f"L2.{name} cannot be tuned"
+    index = pd.Index([11, 22], name="l2_id")
+
+    def get_l2data_table(l2_ids, attributes=None, split_columns=True):
+        if split_columns:  # caveclient's lossy branch
+            return pd.DataFrame(
+                {"pca_0_x": [1.0, 0.0], "rep_coord_nm_x": [1.0, 0.0]}, index=index
+            )
+        return pd.DataFrame(
+            {"pca": [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], np.nan],
+             "rep_coord_nm": [[1, 2, 3], np.nan]},
+            index=index,
+        )
+
+    ds = SimpleNamespace(
+        client=SimpleNamespace(
+            chunkedgraph=SimpleNamespace(get_leaves=lambda root, stop_layer: np.array([11, 22])),
+            l2cache=SimpleNamespace(get_l2data_table=get_l2data_table),
+        )
+    )
+
+    got = l2_info(ds, 1, attributes=("rep_coord_nm", "pca"))
+    assert got["pca_0_x"].isna().tolist() == [False, True]
+    assert got["rep_coord_nm_x"].isna().tolist() == [False, True]
+
+    # And `dropna` then actually removes the positionless chunk, which it could not
+    # do while a missing position arrived as a number.
+    assert len(l2_info(ds, 1, attributes=("rep_coord_nm", "pca"), dropna=True)) == 1
+
+
+def test_l2_info_honours_max_workers(monkeypatch):
+    """The knob has to reach the pool, not just appear in the signature.
+
+    A signature check would pass on a method that accepted `max_workers` and dropped
+    it; this counts the threads that actually ran.
+    """
+    from connecto.backends.cave import l2 as l2_mod
+    from connecto.core.spec import Cap
+
+    threads = set()
+
+    def fake_info(_ds, root, **kw):
+        threads.add(threading.current_thread().ident)
+        time.sleep(0.01)  # long enough that a real pool overlaps
+        return pd.DataFrame(
+            {"rep_coord_nm_x": [1.0], "rep_coord_nm_y": [2.0], "rep_coord_nm_z": [3.0]},
+            index=pd.Index([root], name="l2_id"),
+        )
+
+    monkeypatch.setattr(l2_mod, "l2_info", fake_info)
+    # Enough of a dataset for the capability gate in `requires` to let the call
+    # through; the fan-out is what is under test.
+    ds = SimpleNamespace(
+        capabilities=frozenset({Cap.L2CACHE}),
+        backend_kind="cave",
+        _auth_server=None,
+        source="fake",
+        label="fake",
+        ids=lambda x, version=None: list(x),
+    )
+
+    l2_mod.L2(ds).info(list(range(6)), progress=False, max_workers=1)
+    assert len(threads) == 1
+
+    threads.clear()
+    l2_mod.L2(ds).info(list(range(6)), progress=False, max_workers=4)
+    assert len(threads) > 1
