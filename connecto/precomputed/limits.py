@@ -48,6 +48,22 @@ DEFAULT_MESH_WORKERS = 4
 #: four neurons at 64 apiece would ask for 256 connections at once.
 DEFAULT_MESH_PARALLEL = 32
 
+#: Skeletons in flight in the two backends' ``_fetch_skeletons``.
+#:
+#: A skeleton is one request per neuron - a bucket read, a call to CAVE's skeleton
+#: service, or a neuPrint query - so this is the whole of the parallelism available
+#: and it matters more here than anywhere else in connecto. Measured over 16 neurons:
+#:
+#: * precomputed bucket (FlyWire): 2.2 s serial, 0.22 s at 8 workers.
+#: * CAVE skeleton service (MICrONS): 52.6 s serial, 5.3 s at 8.
+#: * neuPrint store (hemibrain): 5.6 s serial, 1.3 s at 8.
+#:
+#: 8 rather than more because all three curves stop there and two of them turn back
+#: up at 16 (0.27 s and 1.5 s) - and unlike mesh fragments, which come off a public
+#: bucket, two of these three routes are somebody's query service.
+DEFAULT_SKELETON_WORKERS = 8
+
+
 #: Live connections one host may hold, for the shared anonymous session.
 #:
 #: Generous rather than exact. It caps *retained idle* connections and urllib3 opens

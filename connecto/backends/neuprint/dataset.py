@@ -260,10 +260,35 @@ class NeuPrintDataset(Dataset):
 
     # ---------------------------------------------------------------- morphology
 
-    def _fetch_skeletons(self, ids, version, *, heal: bool = True, progress: bool = True, **opts):
+    def _fetch_skeletons(
+        self, ids, version, *, heal: bool = True, progress: bool = True,
+        workers: int | None = None, **opts,
+    ):
+        """Yield ``(body_id, node_table)`` for each neuron, in the order asked for.
+
+        Threaded: a skeleton is one request per neuron either way, so serially it is
+        a round trip of dead time each. 16 hemibrain skeletons take 5.6 s one at a
+        time and 1.3 s eight at a time. See
+        :data:`~connecto.precomputed.limits.DEFAULT_SKELETON_WORKERS`.
+
+        Each worker gets its *own* neuPrint client. neuprint-python keeps per-thread
+        deep copies of its own default client (``DEFAULT_NEUPRINT_CLIENT_THREAD_COPIES``,
+        keyed by thread and pid) rather than share one, which is as clear a statement
+        as the library makes that a ``Client`` is not to be shared across threads.
+        That machinery only runs for callers who let neuprint pick the client;
+        connecto passes one explicitly, so it never fires for us and we have to do
+        the same thing ourselves. A copy costs ~0.2 ms and happens once per thread.
+
+        The CAVE door shares its client instead - see ``backends.cave.skeletons``,
+        where caveclient's own use of threads settles the question the other way.
+        """
+        import copy
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
         from tqdm.auto import tqdm
 
-        from ...core.volume import precomputed_skeleton
+        from ...precomputed.limits import DEFAULT_SKELETON_WORKERS
 
         # A published precomputed bucket wins over neuPrint's own skeleton store.
         # Not every neuPrint dataset *has* a store - `flywire-fafb:v783b` answers
@@ -272,12 +297,30 @@ class NeuPrintDataset(Dataset):
         # anyway. Backend-independent by design: it is a plain HTTPS bucket.
         source = self._skeleton_source(version)
 
-        for body in tqdm(ids, desc="Skeletons", disable=not progress or len(ids) < 2, leave=False):
+        local = threading.local()
+
+        def client_here(self=self):
+            client = getattr(local, "client", None)
+            if client is None:
+                client = local.client = copy.deepcopy(self.client)
+            return client
+
+        def one(body: int):
             if source is not None:
-                yield int(body), precomputed_skeleton(source, int(body))
-                continue
-            yield int(body), self.client.fetch_skeleton(
-                int(body), heal=heal, format="pandas"
+                from ...core.volume import precomputed_skeleton
+
+                return precomputed_skeleton(source, body)
+            return client_here().fetch_skeleton(body, heal=heal, format="pandas")
+
+        bodies = [int(i) for i in ids]
+        budget = DEFAULT_SKELETON_WORKERS if workers is None else int(workers)
+        with ThreadPoolExecutor(max_workers=max(1, min(budget, len(bodies) or 1))) as pool:
+            yield from tqdm(
+                zip(bodies, pool.map(one, bodies)),
+                desc="Skeletons",
+                total=len(bodies),
+                disable=not progress or len(bodies) < 2,
+                leave=False,
             )
 
     def _fetch_meshes(self, ids, version, *, lod=None, progress: bool = True, **opts):

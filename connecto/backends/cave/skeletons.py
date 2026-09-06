@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -25,14 +27,29 @@ import pandas as pd
 from ...core.spec import Cap
 from ...core.volume import precomputed_skeleton
 from ...exceptions import CapabilityError, ConnectoError
+from ...precomputed.limits import DEFAULT_SKELETON_WORKERS
 
 logger = logging.getLogger("connecto")
 
 __all__ = ["fetch_skeletons", "l2_skeleton", "l2_info"]
 
 
-def fetch_skeletons(ds, ids, version, *, progress: bool = True, **opts):
-    """Yield ``(root_id, node_table)`` for each neuron."""
+def fetch_skeletons(
+    ds, ids, version, *, progress: bool = True, workers: int | None = None, **opts
+):
+    """Yield ``(root_id, node_table)`` for each neuron, in the order asked for.
+
+    Threaded, because every route here is one request per neuron and nothing else:
+    a bucket read, a call to the skeleton service, or the two CAVE calls an L2
+    skeleton needs. Serially that is a round trip of dead time per neuron - 16
+    MICrONS skeletons take 52 s one at a time and 5 s eight at a time. See
+    :data:`~connecto.precomputed.limits.DEFAULT_SKELETON_WORKERS`.
+
+    The CAVE client is shared across the workers rather than copied per thread.
+    caveclient fans its own queries out over a ``ThreadPoolExecutor`` holding one
+    client, so that is the library's own position on the question; the neuPrint door
+    has to do the opposite, and says why there.
+    """
     from tqdm.auto import tqdm
 
     source = ds._skeleton_source(version)
@@ -44,11 +61,9 @@ def fetch_skeletons(ds, ids, version, *, progress: bool = True, **opts):
             f"and no L2 cache - skeletons cannot be built for this dataset."
         )
 
-    for root in tqdm(ids, desc="Skeletons", disable=not progress or len(ids) < 2, leave=False):
-        root = int(root)
+    def one(root: int):
         if source is not None:
-            yield root, precomputed_skeleton(source, root)
-            continue
+            return precomputed_skeleton(source, root)
 
         if use_service:
             nodes = _service_skeleton(ds, root)
@@ -57,8 +72,7 @@ def fetch_skeletons(ds, ids, version, *, progress: bool = True, **opts):
             # navis.TreeNeuron would be a 0 um "neuron" - silent degradation of
             # exactly the kind this library exists to prevent.
             if len(nodes) > 1:
-                yield root, nodes
-                continue
+                return nodes
             if not ds.supports(Cap.L2CACHE):
                 raise CapabilityError(
                     f"{ds.label}: the skeleton service has not generated a skeleton "
@@ -71,7 +85,18 @@ def fetch_skeletons(ds, ids, version, *, progress: bool = True, **opts):
                 "No precomputed skeleton for %s yet; building it from the L2 cache.", root
             )
 
-        yield root, l2_skeleton(ds, root)
+        return l2_skeleton(ds, root)
+
+    roots = [int(i) for i in ids]
+    budget = DEFAULT_SKELETON_WORKERS if workers is None else int(workers)
+    with ThreadPoolExecutor(max_workers=max(1, min(budget, len(roots) or 1))) as pool:
+        yield from tqdm(
+            zip(roots, pool.map(one, roots)),
+            desc="Skeletons",
+            total=len(roots),
+            disable=not progress or len(roots) < 2,
+            leave=False,
+        )
 
 
 def _service_available(ds) -> bool:
@@ -96,6 +121,13 @@ def _service_available(ds) -> bool:
         return False
 
 
+#: Serialises the patch/restore below, *not* the request inside it.
+_CV_PATCH_LOCK = threading.Lock()
+
+#: "there was no instance attribute here", which is different from "it was None".
+_UNSET = object()
+
+
 @contextlib.contextmanager
 def _without_cloudvolume_root_check(ds):
     """Let the skeleton service work without cloud-volume installed.
@@ -112,16 +144,41 @@ def _without_cloudvolume_root_check(ds):
     environments for no reason anybody could see, and quietly route back through the
     dependency this reader exists to replace.
 
+    Reference-counted, because this swaps a method on a client several threads share
+    and ``fetch_skeletons`` now runs them concurrently. Save-patch-restore per thread
+    loses that race in the worst way: the second thread in saves the *first* thread's
+    stub as the original, and restores it on the way out - so the stub stays
+    installed for the life of the client, and every later caller gets ``None`` for a
+    volume it may genuinely need. Only the outermost entry patches, only the last
+    exit restores, and the lock is held for the swap alone rather than the request.
+
     Remove this once caveclient no longer reaches for cloud-volume to answer a
     question about a 64-bit integer.
     """
     info = ds.client.info
-    original = info.segmentation_cloudvolume
-    info.segmentation_cloudvolume = lambda *a, **kw: None
+    with _CV_PATCH_LOCK:
+        depth = getattr(info, "_connecto_cv_depth", 0)
+        if depth == 0:
+            # What is saved is the *instance* attribute, or the fact that there was
+            # none. Assigning the bound method back would leave one shadowing the
+            # class for good - the same object by behaviour, but no longer the same
+            # arrangement we were handed.
+            info._connecto_cv_saved = info.__dict__.get("segmentation_cloudvolume", _UNSET)
+            info.segmentation_cloudvolume = lambda *a, **kw: None
+        info._connecto_cv_depth = depth + 1
     try:
         yield
     finally:
-        info.segmentation_cloudvolume = original
+        with _CV_PATCH_LOCK:
+            info._connecto_cv_depth -= 1
+            if info._connecto_cv_depth == 0:
+                saved = info._connecto_cv_saved
+                if saved is _UNSET:
+                    del info.segmentation_cloudvolume
+                else:
+                    info.segmentation_cloudvolume = saved
+                del info._connecto_cv_saved
+                del info._connecto_cv_depth
 
 
 def _check_is_root(ds, root: int) -> None:
