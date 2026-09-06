@@ -542,7 +542,7 @@ class Meshes(_Namespace):
 
         neurons = []
         for nid, mesh in out:
-            n = navis.MeshNeuron(mesh, id=nid, units="1 nm")
+            n = navis.MeshNeuron(mesh, id=nid, units="1 nm", process=False)
             n.name = str(nid)
             neurons.append(n)
         return navis.NeuronList(neurons)
