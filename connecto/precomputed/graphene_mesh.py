@@ -282,11 +282,14 @@ class GrapheneMeshSource:
         """One fragment, start to finish, on a worker thread.
 
         Decoding runs here rather than back on the calling thread because draco
-        decoding is the one part of this that a thread can genuinely overlap: recent
-        DracoPy releases the GIL for it, which turns ~120 ms of serial decode for a
-        big neuron into ~45 ms across the pool. Where it does not (before 2.0), this
-        arrangement is still no worse - the work has to happen on some thread, and
-        doing it here at least overlaps it with the reads still in flight.
+        decoding is the one part of this that a thread can genuinely overlap:
+        DracoPy 2.1 releases the GIL for it (seung-lab/DracoPy#67), and a large Aedes
+        neuron's 71 fragments decode in 46 ms across the pool against 159 ms serially.
+        Before 2.1 the decode holds the GIL, and this arrangement is still no worse:
+        the work has to happen on some thread, and doing it here at least overlaps
+        it with the reads still in flight. Unlike ``MultiResMeshSource``, then, there
+        is no :func:`~connecto.precomputed.limits.decode_workers` gate here - the
+        pool exists for the reads either way.
 
         Chunk-boundary marking comes along for the ride: it is numpy, so it holds the
         GIL and parallelises poorly, but it needs the fragment's own label and doing

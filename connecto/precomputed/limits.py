@@ -20,8 +20,10 @@ from __future__ import annotations
 import functools
 import importlib.metadata
 import os
+import re
 
 __all__ = [
+    "GIL_RELEASING_DRACOPY",
     "DEFAULT_MESH_PARALLEL",
     "DEFAULT_MESH_WORKERS",
     "POOL_MAXSIZE",
@@ -30,12 +32,21 @@ __all__ = [
 
 #: Neurons in flight in :func:`connecto.core.volume.fetch_meshes`.
 #:
-#: Low, and worth less than it looks: what a neuron costs after its bytes arrive -
-#: draco decoding, seam deduplication - is C and numpy holding the GIL, so it
-#: serialises no matter what this is set to. Measured on three Aedes neurons, 4
-#: workers against 1 is 7.97 s against 8.24 s. The fan-out that pays is the one
-#: below.
-DEFAULT_MESH_WORKERS = 4
+#: Eight Aedes neurons (40M vertices), interleaved runs, medians:
+#:
+#: * DracoPy 2.1: 8.9 s at 4, 7.8 s at 8, 8.0 s at 12 and 16.
+#: * DracoPy 1.7: 21.3 s at 4, 20.8 s at 8.
+#:
+#: So 8, where the 2.1 curve flattens, and which costs the older decoder nothing.
+#: It used to be 4, on the reasoning that what a neuron costs once its bytes arrive
+#: - draco decoding, seam welding - holds the GIL and serialises however many
+#: neurons are in flight. With a decoder that releases it, the biggest share of that
+#: work overlaps, and that reasoning describes only the old DracoPy. What still
+#: serialises is the numpy seam welding, around 0.1 s per large neuron.
+#:
+#: The product with ``DEFAULT_MESH_PARALLEL`` is 256 fragment reads at once, which
+#: ``POOL_MAXSIZE`` below is sized to keep.
+DEFAULT_MESH_WORKERS = 8
 
 #: Fragment reads in flight within one mesh.
 #:
@@ -59,6 +70,10 @@ DEFAULT_MESH_PARALLEL = 32
 POOL_MAXSIZE = max(512, DEFAULT_MESH_WORKERS * DEFAULT_MESH_PARALLEL + 64)
 
 
+#: The first DracoPy that releases the GIL during decode (seung-lab/DracoPy#67).
+GIL_RELEASING_DRACOPY = (2, 1)
+
+
 @functools.cache
 def decode_workers() -> int:
     """Threads for decoding draco fragments that have *already* been fetched.
@@ -68,31 +83,37 @@ def decode_workers() -> int:
     as many as there are cores.
 
     It only pays with a DracoPy that releases the GIL during decode, and that is a
-    capability, not a constant - so it is tested rather than assumed. Measured on one
-    hemibrain neuron's 60 LOD-0 fragments, 14-core machine:
+    capability, not a constant - so it is tested rather than assumed. The same 215
+    fragments (two Aedes neurons, two hemibrain LOD-0 meshes), 14-core machine:
 
-    * GIL-releasing DracoPy: 163 ms at 1 worker, 48 ms at 4, 37 ms at 8, 34 ms at 16.
-    * Stock DracoPy 1.7: 628 ms at 1, 637 ms at 4, 675 ms at 8. Decode serialises
-      whatever is pointed at it, and the handoffs cost ~6%.
+    ========  =========  ===========  ===========
+    DracoPy   serial     8 threads    output
+    ========  =========  ===========  ===========
+    1.7.0     1994 ms    0.95-1.00x   identical
+    2.0.0     1972 ms    0.97-1.00x   identical
+    2.1.0      510 ms    3.5-5.6x     identical
+    ========  =========  ===========  ===========
 
-    Which is why this answers ``1`` there, and callers take a plain serial loop:
-    connecto declares ``DracoPy>=1.4.0``, so most installs are the second case, and a
-    default that is knowingly 6% slow for them is not made acceptable by a comment
-    saying so.
+    So below 2.1 this answers ``1`` and callers take a plain serial loop: pointing
+    threads at a decoder that holds the GIL buys nothing and the handoffs cost a few
+    percent. connecto declares ``DracoPy>=1.4.0``, so that is still most installs.
 
-    The test is the installed version, not a timing probe - timing is flaky and
-    test-hostile. It is a guess about someone else's release, and it can be wrong: a
-    published DracoPy 2.0 that does *not* release the GIL would put us back to the
-    6%, which is exactly today's behaviour and no worse. Capped at 8 because the
-    curve is flat past there - another 8 threads buy 3 ms - and connecto is a library
-    that runs inside other people's pipelines.
+    Note it is 2.1, not 2.0. A 2.0.0 was published before the GIL work landed and
+    behaves exactly like 1.7 - this gate used to check the major version only and
+    got that wrong, which is the case its own docstring warned about. The test is
+    the installed version rather than a timing probe, because timing is flaky and
+    test-hostile; an unparseable version string is treated as the old decoder,
+    which costs a little speed and never correctness.
+
+    Capped at 8 because the curve is flat past there and connecto is a library that
+    runs inside other people's pipelines.
     """
     try:
         version = importlib.metadata.version("dracopy")
     except importlib.metadata.PackageNotFoundError:  # pragma: no cover
         return 1
 
-    major = version.split(".")[0]
-    if not (major.isdigit() and int(major) >= 2):
+    match = re.match(r"(\d+)\.(\d+)", version)
+    if match is None or tuple(map(int, match.groups())) < GIL_RELEASING_DRACOPY:
         return 1
     return min(os.cpu_count() or 4, 8)

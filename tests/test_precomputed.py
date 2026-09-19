@@ -670,15 +670,31 @@ def test_pool_ceiling_covers_the_mesh_fan_out():
 
 @pytest.mark.parametrize(
     ("version", "threaded"),
-    [("1.7.0", False), ("1.4.0", False), ("2.0.0", True), ("2.1.3", True), ("weird", False)],
+    [
+        ("1.4.0", False),
+        ("1.7.0", False),
+        # Published before the GIL work landed, and measured to behave exactly like
+        # 1.7 - the case a major-version check got wrong.
+        ("2.0.0", False),
+        ("2.0.9", False),
+        ("2.1.0", True),
+        ("2.1.3", True),
+        ("2.10.0", True),
+        ("3.0.0", True),
+        # The one that tells numbers from strings: "10.0.0" < "2.1" lexically.
+        ("10.0.0", True),
+        ("2.1.0rc1", True),
+        ("weird", False),
+    ],
 )
 def test_decode_workers_follows_the_installed_dracopy(version, threaded, monkeypatch):
     """Decode threads only where decoding can actually overlap.
 
-    DracoPy holds the GIL through `decode` until 2.0, where pointing threads at it
-    costs ~6% and gains nothing. connecto declares `DracoPy>=1.4.0`, so that is most
-    installs, and they must come out at 1 - which `MultiResMeshSource.get` turns into
-    the plain serial loop rather than a pool of one.
+    DracoPy holds the GIL through `decode` until 2.1 (seung-lab/DracoPy#67); before
+    that, pointing threads at it costs a few percent and gains nothing. connecto
+    declares `DracoPy>=1.4.0`, so that is most installs, and they must come out at 1
+    - which `MultiResMeshSource.get` turns into the plain serial loop rather than a
+    pool of one.
     """
     from connecto.precomputed import limits
 
