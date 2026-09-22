@@ -96,10 +96,13 @@ AEDES_SPEC = DatasetSpec(
         "type": ("type", "flywire_type"),
         "side": ("side",),
         # aedes_main has both a fine `class` (KC, CX, ALSN, LHN, ...) and a coarse
-        # `superclass` (cb_intrinsic, cb_sensory, visual_projection, ...). The fine
-        # one wins so `ds.ids("class:KC")` works; `superclass` falls in behind it for
-        # the ~3.6k neurons with no fine class, and both survive as raw columns.
-        "class": ("class", "superclass"),
+        # `superclass` (cb_intrinsic, cb_sensory, visual_projection, ...). Two levels
+        # of one hierarchy, so each is canonical on its own and neither falls in
+        # behind the other: `ds.ids("class:KC")` asks about cell classes, and the
+        # ~3.6k neurons with no cell class answer `superclass` instead of quietly
+        # answering `class`.
+        "class": ("class",),
+        "superclass": ("superclass",),
         "nt": ("neurotransmitter_verified",),
         "status": ("status",),
         # No `soma`: the flytable's `soma_xyz` is one voxel-space "x,y,z" string, and

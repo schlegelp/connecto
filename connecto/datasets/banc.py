@@ -142,7 +142,13 @@ BANC_SPEC = DatasetSpec(
             fields={
                 # Same concepts as `fields` below, neuPrint's spelling.
                 "type": ("type", "fafbCellType", "malecnsCellType"),
-                "class": ("superclass", "class"),
+                # As on FlyWire's mirror, and for the same reason: the middle
+                # level is spelled `class` here, so a `("superclass", "class")`
+                # priority list overwrote it rather than ranking behind it, and
+                # 89,409 bodies lost their cell class outright.
+                "superclass": ("superclass",),
+                "class": ("class",),
+                "subclass": ("subclass",),
                 "nt": ("neurotransmitterVerified", "neurotransmitterPredicted"),
                 # ...and one it has not got. 8,153 of 175,420 bodies carry a `side`
                 # here, against all 158,250 in codex. Empty rather than left to look
@@ -178,7 +184,12 @@ BANC_SPEC = DatasetSpec(
     fields={
         "type": ("cell_type", "fafb_783_cell_type", "malecns_09_cell_type", "manc_121_cell_type"),
         "side": ("side",),
-        "class": ("super_class", "cell_class"),
+        # Three levels of one hierarchy, one column each - see FlyWire, whose
+        # scheme this is. codex populates 146,759 `super_class` against 89,419
+        # `cell_class`, so coarse-first priority buried the finer level entirely.
+        "superclass": ("super_class",),
+        "class": ("cell_class",),
+        "subclass": ("cell_sub_class",),
         "nt": ("neurotransmitter_verified", "neurotransmitter_predicted"),
         "status": ("status",),
         # Only the neuPrint source has these (codex carries no soma point at all);

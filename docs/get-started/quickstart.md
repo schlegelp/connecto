@@ -52,7 +52,7 @@ and mutates nothing.
 ```python
 fw.ids("DA1_lPN", side="left")        # 8 of them
 fw.ids("/^AOTU00.*")                  # regex -> 35 neurons
-fw.ids("super_class:visual_projection")   # any annotation column
+fw.ids("superclass:visual_projection")    # any annotation column
 ```
 
 ## 3. Ask what they connect to

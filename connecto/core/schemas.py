@@ -59,7 +59,11 @@ ANNOTATION_DTYPES = {
     "id": "int64",
     "type": "string",
     "side": "category",
+    # The three levels of the fly annotation hierarchy, canonical separately and
+    # never coalesced into one another - see `normalize_annotations`.
+    "superclass": "string",
     "class": "string",
+    "subclass": "string",
     "nt": "category",
     "nt_source": "category",
     "status": "string",
@@ -342,8 +346,22 @@ def normalize_annotations(
 ) -> pd.DataFrame:
     """Add canonical columns to an annotation frame; keep every raw column.
 
-    Canonical: ``id, type, side, class, nt, nt_source, status, soma_x/y/z``.
-    Derived by column priority from ``spec.fields``, overridable per call.
+    Canonical: ``id, type, side, superclass, class, subclass, nt, nt_source,
+    status, soma_x/y/z``. Derived by column priority from ``spec.fields``,
+    overridable per call.
+
+    `superclass`, `class` and `subclass` are three *levels* of one hierarchy, not
+    three opinions about one field, and each gets its own canonical column fed
+    from one source column. They are never coalesced into one another. A priority
+    list like ``("superclass", "class")`` reads as "use the coarse level, or the
+    fine one where it is missing", which puts `optic` and `Kenyon_Cell` - a whole
+    tier apart - in the same column with nothing to say which is which; and where
+    the source spells its own middle level `class`, the coalesced result overwrites
+    it, so the fine level is not merely shadowed but gone. Datasets differ over
+    which levels they have and what they call them (MANC's `class` holds
+    superclass-level values), so a dataset maps each level it has and leaves the
+    rest out. Several columns for one level is still fine - that *is* a set of
+    opinions, which is what `type` coalescing is for.
 
     ``nt`` gets a companion ``nt_source`` naming the column each value came from,
     and it is the one field that does. The reason is that a dataset's transmitter
@@ -374,19 +392,6 @@ def normalize_annotations(
         if src_col in df.columns and new_col not in df.columns:
             df[new_col] = df[src_col].astype("string").str.extract(pattern, expand=False)
 
-    # A source may declare a field explicitly empty - "this table does not have
-    # one" (see `AnnotationSource.fields`). A raw column of the same name is then
-    # not it, and must not be mistaken for it: leaving BANC's neuPrint `side` in
-    # place would let `ids(side="left")` quietly answer from the 5% of neurons that
-    # have one. Moved aside, so the canonical column is absent and the query says so.
-    #
-    # After `derive`, not before: `derive` fills a column only when it is missing,
-    # so suppressing one first would invite it to be re-created from a regex two
-    # lines later - reopening the hole this closes.
-    for canon, cols in fields.items():
-        if not cols and canon in df.columns:
-            df = df.rename(columns={canon: f"{canon}_raw"})
-
     def _derive(canon, cols):
         # If none of the source columns exist, leave the canonical column *out*
         # rather than inventing an all-null one. A missing column is honest; a
@@ -395,7 +400,7 @@ def normalize_annotations(
             return None, None
         return _coalesce(df, cols)
 
-    for canon in ("type", "class", "nt", "status", "instance"):
+    for canon in ("type", "superclass", "class", "subclass", "nt", "status", "instance"):
         derived, source = _derive(canon, fields.get(canon))
         if derived is None:
             continue
@@ -421,6 +426,22 @@ def normalize_annotations(
         if "side" in df.columns and "side" not in side_cols:
             df = df.rename(columns={"side": "side_raw"})
         df["side"] = side
+
+    # A source may declare a field explicitly empty - "this table does not have
+    # one" (see `AnnotationSource.fields`). A raw column of the same name is then
+    # not it, and must not be mistaken for it: leaving BANC's neuPrint `side` in
+    # place would let `ids(side="left")` quietly answer from the 5% of neurons that
+    # have one. Moved aside, so the canonical column is absent and the query says so.
+    #
+    # Last, after every canonical column has been derived, for two reasons. A
+    # disclaimed column may still be the *source* of another field: MANC's `class`
+    # holds superclass-level values, so it feeds canonical `superclass` and then
+    # steps aside, and suppressing it first would leave nothing to read. And
+    # `ds.spec.derive` fills a column only when it is missing, so suppressing ahead
+    # of that would invite the regex to re-create the very column this moves away.
+    for canon, cols in fields.items():
+        if not cols and canon in df.columns:
+            df = df.rename(columns={canon: f"{canon}_raw"})
 
     soma_cols = fields.get("soma")
     if soma_cols and len(soma_cols) == 3:
@@ -449,8 +470,8 @@ def normalize_annotations(
     df = _order(
         df,
         [
-            "id", "type", "side", "class", "nt", "nt_source", "status",
-            "soma_x", "soma_y", "soma_z",
+            "id", "type", "side", "superclass", "class", "subclass",
+            "nt", "nt_source", "status", "soma_x", "soma_y", "soma_z",
         ],
     )
     out = stamp(

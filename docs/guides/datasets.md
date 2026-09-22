@@ -479,8 +479,10 @@ aedes.ids("class:KC")                # ConnectoAuthError: No SeaTable credential
 ```
 
 `aedes_main` carries both a fine `class` (KC, CX, ALSN, …) and a coarse `superclass`
-(cb_intrinsic, cb_sensory, …); the fine one is the canonical `class`, the coarse one
-falls in behind it and both stay queryable. Somas still come from the nucleus table in
+(cb_intrinsic, cb_sensory, …). They are two levels of one hierarchy, so each is
+canonical in its own right and neither falls in behind the other: `class:KC` asks
+about cell classes and `superclass:cb_intrinsic` about the tier above, and a neuron
+with no cell class has none rather than borrowing the coarser label. Somas still come from the nucleus table in
 nanometres (`aedes.somas`), not from the table's voxel-space `soma_xyz` column, which
 passes through untouched.
 

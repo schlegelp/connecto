@@ -480,6 +480,12 @@ class DatasetSpec:
     # Canonical field -> source columns, in priority order. First non-null wins.
     # This one mapping replaces cocoa's _type_cols, _side_cols, _align_columns,
     # _find_column and _backfill_types.
+    #
+    # Priority is for *opinions* about one thing - `type` across `cell_type` and
+    # `hemibrain_type`. It is not for levels of a hierarchy: `superclass`, `class`
+    # and `subclass` each take exactly one column, because coalescing them mixes
+    # tiers and, where a source spells its middle tier `class`, destroys it. See
+    # `normalize_annotations`.
     fields: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     # New column -> (source column, regex with one capture group).

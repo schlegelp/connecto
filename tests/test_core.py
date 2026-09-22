@@ -379,6 +379,61 @@ def test_a_raw_nt_source_column_does_not_get_clobbered():
     assert out["nt_source_raw"].tolist() == ["Davis et al., 2020"]
 
 
+def test_the_class_hierarchy_levels_stay_separate():
+    """`superclass` > `class` > `subclass` are tiers, not competing opinions.
+
+    FlyWire's neuPrint mirror spells the middle tier `class`, so the coalescing
+    that `type` wants is actively destructive here: `("superclass", "class")` wrote
+    the coarse level back into the `class` column, and because the canonical name
+    was itself one of the source columns, no `class_raw` was kept. 107,504 neurons
+    lost their cell class, and `class` came back a copy of `superclass`.
+    """
+    raw = pd.DataFrame(
+        {
+            "root_id": [1, 2],
+            "superclass": ["optic", "central"],
+            "class": ["Kenyon_Cell", None],
+            "subclass": ["KCg", None],
+        }
+    )
+
+    class _DS(_FakeDS):
+        class spec(_FakeSpec):
+            fields = {
+                "superclass": ("superclass",),
+                "class": ("class",),
+                "subclass": ("subclass",),
+            }
+
+    out = normalize_annotations(raw, _DS(), id_column="root_id")
+    assert out["superclass"].tolist() == ["optic", "central"]
+    assert out["class"].tolist()[0] == "Kenyon_Cell"
+    assert out["subclass"].tolist()[0] == "KCg"
+    # The neuron with no cell class has *no* cell class. It does not inherit the
+    # tier above, which is what makes `ids("class:...")` mean one thing.
+    assert pd.isna(out["class"].iloc[1])
+    assert pd.isna(out["subclass"].iloc[1])
+
+
+def test_a_disclaimed_column_can_still_feed_another_level():
+    """MANC's `class` holds superclass-level values (`descending neuron`, ...).
+
+    It maps to canonical `superclass` and then steps aside, so `ids("class:...")`
+    cannot answer at the wrong tier. Both halves have to happen, and in that order:
+    suppressing first would leave `superclass` nothing to read.
+    """
+    raw = pd.DataFrame({"root_id": [1], "class": ["descending neuron"]})
+
+    class _DS(_FakeDS):
+        class spec(_FakeSpec):
+            fields = {"superclass": ("class",), "class": ()}
+
+    out = normalize_annotations(raw, _DS(), id_column="root_id")
+    assert out["superclass"].tolist() == ["descending neuron"]
+    assert "class" not in out.columns
+    assert out["class_raw"].tolist() == ["descending neuron"]
+
+
 # ------------------------------------------------------- per-source annotations
 
 def test_a_source_can_declare_a_field_it_does_not_have():

@@ -86,10 +86,12 @@ class Annotations(_Namespace):
     ) -> pd.DataFrame:
         """Annotations, with canonical columns added and every raw column kept.
 
-        Canonical: ``id, type, side, class, nt, status, soma_x/y/z``. ``type`` is
-        coalesced from ``spec.fields["type"]`` in priority order; ``side`` is
-        mapped to ``left``/``right``/``center``. Pass ``raw=True`` for the
-        untouched backend frame.
+        Canonical: ``id, type, side, superclass, class, subclass, nt, status,
+        soma_x/y/z``. ``type`` is coalesced from ``spec.fields["type"]`` in
+        priority order; ``side`` is mapped to ``left``/``right``/``center``. The
+        three class levels are never coalesced into one another - each is fed from
+        one column, and a dataset that lacks a level leaves it out. Pass
+        ``raw=True`` for the untouched backend frame.
 
         ``verbose`` (default ``True``) prints one line saying which source is being
         read and whether it came from the remote server, the local cache, or a
@@ -190,9 +192,19 @@ class Annotations(_Namespace):
 
     @requires(Cap.ANNOTATIONS)
     def search(self, term: str, *, version=None, regex: bool = True) -> pd.DataFrame:
-        """Rows whose `type`, `class` or `instance` matches ``term``."""
+        """Rows whose `type`, `class` or `instance` matches ``term``.
+
+        `class` here means all three levels of the hierarchy - `superclass`,
+        `class` and `subclass` are separate columns holding separate tiers, and a
+        free-text search that knew about only the middle one would miss
+        `optic` and `KCg` while finding `Kenyon_Cell`.
+        """
         ann = self.get(version=version, verbose=False)
-        cols = [c for c in ("type", "class", "instance") if c in ann.columns]
+        cols = [
+            c
+            for c in ("type", "superclass", "class", "subclass", "instance")
+            if c in ann.columns
+        ]
         mask = pd.Series(False, index=ann.index)
         for col in cols:
             s = ann[col].astype("string")

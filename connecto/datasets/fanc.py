@@ -104,7 +104,12 @@ FANC_SPEC = DatasetSpec(
     fields={
         "type": ("neuron identity",),
         "side": ("soma side",),
-        "class": ("primary class",),
+        # Mapped by meaning, as MANC's is: `primary class` holds glia, sensory
+        # neuron, central neuron, motor neuron and efferent non-motor neuron - the
+        # superclass tier, not the cell-class one. FANC has nothing at the tier
+        # below, so canonical `class` is simply absent rather than filled with a
+        # coarser level.
+        "superclass": ("primary class",),
         # No `nt`: exactly one neuron in the whole table carries a
         # "fast neurotransmitter" tag, and a field backed by one row is a
         # promise connecto cannot keep.

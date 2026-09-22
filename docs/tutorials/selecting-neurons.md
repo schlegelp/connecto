@@ -48,7 +48,7 @@ fw = cn.FlyWire()
 === "A column filter"
 
     ```python
-    fw.ids("super_class:visual_projection")
+    fw.ids("superclass:visual_projection")
     ```
 
     `column:value` filters any column in the annotation table — not just the ones
@@ -166,22 +166,52 @@ ann.columns.tolist()
 ```
 
 ```
-['id', 'type', 'side', 'class', 'nt', 'nt_source', 'status', 'soma_x', 'soma_y',
- 'soma_z', 'pre', 'post', 'downstream', 'upstream', 'statusLabel', 'areaNm',
- 'connectivityTag', 'crossVersionConsistentName', 'dimorphism', 'flow', 'fruDsx',
- 'hartensteinHemilineage', 'hemibrainType', 'itoLeeHemilineage', 'lengthNm',
- 'location', 'nerve', 'ntAcetylcholineProb', 'ntDopamineProb', 'ntGabaProb',
- 'ntGlutamateProb', 'ntOctopamineProb', 'ntSerotoninProb', 'opticColumnId',
- 'opticColumnP', 'opticColumnQ', 'opticColumnX', 'opticColumnY', 'outlier',
- 'predictedNt', 'predictedNtProb', 'sizeNm', 'subclass', 'superclass',
- 'supertype', 'supervoxelId', 'synonyms', 'synweight', 'vfbId']
+['id', 'type', 'side', 'superclass', 'class', 'subclass', 'nt', 'nt_source', 'status',
+ 'soma_x', 'soma_y', 'soma_z', 'pre', 'post', 'downstream', 'upstream',
+ 'statusLabel', 'areaNm', 'connectivityTag', 'crossVersionConsistentName',
+ 'dimorphism', 'flow', 'fruDsx', 'hartensteinHemilineage', 'hemibrainType',
+ 'itoLeeHemilineage', 'lengthNm', 'location', 'nerve', 'ntAcetylcholineProb',
+ 'ntDopamineProb', 'ntGabaProb', 'ntGlutamateProb', 'ntOctopamineProb',
+ 'ntSerotoninProb', 'opticColumnId', 'opticColumnP', 'opticColumnQ', 'opticColumnX',
+ 'opticColumnY', 'outlier', 'predictedNt', 'predictedNtProb', 'sizeNm', 'supertype',
+ 'supervoxelId', 'synonyms', 'synweight', 'vfbId']
 ```
 
-The first ten are **canonical** — the same names, same dtypes, same units on every
-dataset. The remaining thirty-nine are FlyWire's own, passed through untouched. Pick a
+The first twelve are **canonical** — the same names, same dtypes, same units on every
+dataset. The remaining thirty-seven are FlyWire's own, passed through untouched. Pick a
 different source and the tail changes completely while the first ten do not:
 `fw.annotations.get("DA1_lPN", source="public")` hands back the published TSV's
 snake_case columns instead.
+
+### `superclass`, `class`, `subclass` are *not* coalesced
+
+`type` coalesces because a dataset's type columns are competing opinions about one
+thing. The class columns are not: they are three levels of one hierarchy, and each
+gets its own canonical column fed from one source column.
+
+```python
+fw.annotations.get(class_="Kenyon_Cell")[["superclass", "class", "subclass"]].head(2)
+```
+
+```
+  superclass        class subclass
+0    central  Kenyon_Cell     <NA>
+1    central  Kenyon_Cell      KCg
+```
+
+Coalescing them would read as "use the coarse level, or the fine one where it is
+missing", which puts `optic` and `Kenyon_Cell` — a whole tier apart — in one column
+with nothing to say which you got. A neuron with no cell class therefore has none,
+rather than quietly inheriting `central` from the tier above.
+
+Which levels exist differs by dataset, and so does what the source calls them.
+FlyWire's published TSV spells them `super_class` / `cell_class` / `cell_sub_class`
+and its neuPrint mirror `superclass` / `class` / `subclass`; both answer
+`fw.ids("superclass:optic")`, which is the point of the canonical names. MANC's
+`class` column holds superclass-level values (`descending neuron`, `motor neuron`),
+so it is mapped to `superclass` by what it means rather than by what it is called,
+and MANC has no canonical `class` at all — its original column is still there as
+`class_raw`.
 
 ### `nt` is coalesced too — and says so
 
@@ -256,7 +286,7 @@ Did you mean 'super_class'?
 Left-side olfactory projection neurons, and what they talk to:
 
 ```python
-alpn = fw.ids("cell_class:ALPN", side="left")
+alpn = fw.ids("class:ALPN", side="left")
 len(alpn)
 ```
 

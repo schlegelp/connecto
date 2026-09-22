@@ -4,7 +4,7 @@
 ds.ids(720575940604407468)          # an ID
 ds.ids("DA1_lPN")                   # a type
 ds.ids("/^AOTU00.*")                # a regex
-ds.ids("super_class:visual_projection")   # any annotation column
+ds.ids("superclass:visual_projection")    # any annotation column
 ds.ids("DA1_lPN", side="left")
 ds.ids(NeuronCriteria(type="DA1_lPN", side="left"))
 ```

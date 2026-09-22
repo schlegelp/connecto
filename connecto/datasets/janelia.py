@@ -186,7 +186,14 @@ MALECNS = DatasetSpec(
         #   mcns.annotations.get(fields={"type": ("flywireType", "type")})
         "type": ("type", "flywireType", "hemibrainType", "mancType"),
         "side": ("somaSide", "rootSide"),
-        "class": ("class", "subclass"),
+        # maleCNS has FlyWire's three-level hierarchy under neuPrint's spelling.
+        # One column per level, never coalesced: `("class", "subclass")` used to put
+        # subclass values (`lt`, `xn`, `pm`) into canonical `class` for the 14,067
+        # bodies that have a subclass and no class, which reads as a cell class and
+        # is not one.
+        "superclass": ("superclass",),
+        "class": ("class",),
+        "subclass": ("subclass",),
         # `consensusNt` first, not `predictedNt`. They are equally populated
         # (174,165 of 176,422 bodies each), so this is not about coverage: it is
         # that they answer different questions. `predictedNt` is what the classifier
@@ -273,7 +280,20 @@ MANC_SPEC = DatasetSpec(
     fields={
         "type": ("type", "systematicType", "instance"),
         "side": ("somaSide", "rootSide"),
-        "class": ("class", "subclass"),
+        # Mapped by what the values *mean*, not by what the column is called.
+        # MANC's `class` holds superclass-level values - `descending neuron`,
+        # `sensory neuron`, `motor neuron`, `intrinsic neuron` - the same tier as
+        # maleCNS's `superclass` and FlyWire's `super_class`, so that is where it
+        # goes and `ids("superclass:descending neuron")` means the same thing on
+        # all three. Its `subclass` (`lt`, `xn`, `CR`, ...) is maleCNS's `subclass`.
+        #
+        # What MANC has not got is the tier in between. Declared empty rather than
+        # left to the raw `class` column, which would otherwise let
+        # `ids("class:descending neuron")` answer at the wrong level; it survives
+        # as `class_raw`.
+        "superclass": ("class",),
+        "class": (),
+        "subclass": ("subclass",),
         "nt": ("predictedNt",),
         "status": ("status",),
     },

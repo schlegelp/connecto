@@ -383,7 +383,7 @@ class Dataset(ABC):
         """Resolve any neuron query to an array of int64 IDs.
 
             ds.ids(720575940621039145)   ds.ids("DA1_lPN")
-            ds.ids("/AOTU00.*")          ds.ids("cell_class:ALPN", side="left")
+            ds.ids("/AOTU00.*")          ds.ids("class:ALPN", side="left")
         """
         return parse_ids(x, self, side=side, regex=regex, version=version)
 

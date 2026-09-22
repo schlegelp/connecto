@@ -45,7 +45,7 @@ Rows are sources, columns are targets, `int32`, zeros filled in. Different sets 
 two axes if you want them:
 
 ```python
-fw.connectivity.adjacency(sources="DA1_lPN", targets="cell_class:ALLN")
+fw.connectivity.adjacency(sources="DA1_lPN", targets="class:ALLN")
 ```
 
 The row and column order is exactly the order of the IDs you passed, so it lines up

@@ -57,7 +57,14 @@ ANNOTATIONS_URL = (
 _FIELDS = {
     "type": ("cell_type", "hemibrain_type"),
     "side": ("side",),
-    "class": ("super_class", "cell_class"),
+    # Three levels, three columns, no coalescing between them: `super_class` is
+    # the flow/modality tier (optic, central, sensory, ...), `cell_class` the
+    # familiar one (Kenyon_Cell, ALPN, CX, ...) and `cell_sub_class` finer still.
+    # Coarse-first priority would have hidden `cell_class` behind a `super_class`
+    # that 139,248 of 139,255 neurons carry.
+    "superclass": ("super_class",),
+    "class": ("cell_class",),
+    "subclass": ("cell_sub_class",),
     "nt": ("known_nt", "top_nt"),
     "status": ("status",),
     "soma": ("soma_x", "soma_y", "soma_z"),  # neuPrint's somaLocation is split to these
@@ -112,7 +119,14 @@ _ANNOTATIONS = (
         # as long as no two sources share a column name.
         fields={
             "type": ("type", "hemibrainType"),
-            "class": ("superclass", "class"),
+            # The same three levels, camelCased. Spelling the middle one `class`
+            # is why the priority list that used to stand here did real damage
+            # rather than only ranking oddly: the coalesced result is written back
+            # to `class`, so `superclass` first did not shadow the cell class, it
+            # overwrote it, and 107,504 neurons lost it with no `class_raw` left.
+            "superclass": ("superclass",),
+            "class": ("class",),
+            "subclass": ("subclass",),
             "nt": ("predictedNt",),
         },
     ),

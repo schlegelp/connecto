@@ -6,7 +6,7 @@ criteria object:
     ds.ids(720575940621039145)      # a raw ID
     ds.ids("DA1_lPN")              # a type, matched across spec.fields["type"]
     ds.ids("/AOTU00.*")            # a regex
-    ds.ids("cell_class:ALPN")      # an explicit column filter
+    ds.ids("class:ALPN")           # an explicit column filter
     ds.ids(NeuronCriteria(type="DA1_lPN", side="left"))
 
 ``parse_ids`` is a *pure function*: it takes a query and returns IDs. It does not
