@@ -540,12 +540,32 @@ class Meshes(_Namespace):
     """Meshes, as navis MeshNeurons."""
 
     @requires(Cap.MESHES)
-    def get(self, x, *, output: str = "navis", lod=None, version=None, **opts):
+    def get(
+        self, x, *, output: str = "navis", lod=None, lod_fallback: bool = False,
+        version=None, **opts,
+    ):
+        """Meshes for `x`, as a NeuronList (or ``output="raw"`` for trimeshes).
+
+        ``lod`` is the level of the mesh octree, 0 being the full-resolution
+        surface. Leave it as ``None`` and the dataset decides (``spec.mesh_lod``):
+        the Janelia FlyEM volumes prefer level 1, because their level 0 runs to tens
+        of millions of vertices per neuron, and everything else prefers level 0.
+
+        A dataset's preference is clamped to what each object actually has, since
+        octree depth varies per object - a small FlyWire neuron has exactly one
+        level. A level you name yourself is not clamped: asking for one that does
+        not exist raises rather than quietly handing back a different surface -
+        unless you pass ``lod_fallback=True``, in which case a neuron too shallow
+        for the level you asked for comes back at the coarsest level it does have.
+        That is the thing to use on a mixed batch: ``lod=2, lod_fallback=True``
+        gets level 2 wherever it exists and the best available elsewhere. For "the
+        coarsest there is", ask for ``lod=-1``.
+        """
         ds = self._ds
         v = ds._resolve_version_arg(version)
         ids = ds.ids(x, version=version)
 
-        out = list(ds._fetch_meshes(ids, v, lod=lod, **opts))
+        out = list(ds._fetch_meshes(ids, v, lod=lod, lod_fallback=lod_fallback, **opts))
 
         if output == "raw":
             return {nid: m for nid, m in out}

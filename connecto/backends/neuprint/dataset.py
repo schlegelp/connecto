@@ -339,7 +339,10 @@ class NeuPrintDataset(Dataset):
             progress=progress,
         )
 
-    def _fetch_meshes(self, ids, version, *, lod=None, progress: bool = True, **opts):
+    def _fetch_meshes(
+        self, ids, version, *, lod=None, lod_fallback: bool = False,
+        progress: bool = True, **opts,
+    ):
         """Yield ``(body_id, trimesh.Trimesh)``.
 
         Read straight from the published precomputed bucket where the dataset
@@ -347,9 +350,8 @@ class NeuPrintDataset(Dataset):
         plain HTTPS and needs no neuPrint login, and reading it here rather than
         through navis keeps the mesh path on connecto's own reader.
 
-        ``lod=1`` by default, not 0. These are deep octrees and level 0 is the
-        full-resolution surface: one hemibrain neuron at level 0 is 36 million
-        vertices, which is not what somebody asking for "the mesh" wants.
+        A defaulted ``lod`` is the dataset's ``spec.mesh_lod``, resolved by
+        :func:`~connecto.core.volume.fetch_meshes` like on every other door.
 
         ``**opts`` reaches :func:`~connecto.core.volume.fetch_meshes`, so
         ``max_workers=`` and ``parallel=`` tune this door exactly as they tune the
@@ -366,6 +368,8 @@ class NeuPrintDataset(Dataset):
             # and say where the keyword *does* work - `parallel=` is real on every
             # other mesh route, so "not supported" alone would read as a connecto
             # limitation rather than as a property of this one fallback.
+            if lod_fallback:
+                opts["lod_fallback"] = lod_fallback  # navis cannot fall back either
             if opts:
                 raise TypeError(
                     f"{self.label} publishes no mesh volume, so its meshes come from "
@@ -378,7 +382,7 @@ class NeuPrintDataset(Dataset):
 
             neurons = neu.fetch_mesh_neuron(
                 np.asarray(ids, dtype="int64").tolist(),
-                lod=1 if lod is None else lod,
+                lod=self.spec.mesh_lod if lod is None else lod,
                 client=self.client,
                 progress=progress,
             )
@@ -387,7 +391,7 @@ class NeuPrintDataset(Dataset):
             return
 
         yield from fetch_meshes(
-            self, ids, source=source, lod=1 if lod is None else lod,
+            self, ids, source=source, lod=lod, lod_fallback=lod_fallback,
             progress=progress, **opts,
         )
 

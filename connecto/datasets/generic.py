@@ -126,6 +126,7 @@ def probe_neuprint(dataset: str, server: str = "neuprint.janelia.org", **overrid
         annotation_sources=(AnnotationSource("neuprint", "neuprint", id_column="bodyId"),),
         voxel_size=voxel,
         capabilities=frozenset(caps),
+        mesh_lod=1,  # FlyEM-style octree, as hemibrain; override with `mesh_lod=0`
     )
     return spec.evolve(**overrides) if overrides else spec
 

@@ -52,6 +52,7 @@ class _Vol:
         self.agglomerable = str(source).startswith("graphene://")
         self.reads: list = []
         self.downloads: list = []
+        self.mesh = _MeshSource(has_lods=not self.agglomerable)
 
     def mip_resolution(self, mip):
         return np.array(RES)
@@ -67,7 +68,19 @@ class _Vol:
         return np.zeros((2, 2, 2, 1), dtype="uint64")
 
 
-def _spec(name, caps, source):
+class _MeshSource:
+    """Records the keyword arguments `fetch_meshes` decided to send down."""
+
+    def __init__(self, has_lods):
+        self.has_lods = has_lods
+        self.calls: list = []
+
+    def get(self, segid, **kwargs):
+        self.calls.append((int(segid), kwargs))
+        return object()
+
+
+def _spec(name, caps, source, **extra):
     return DatasetSpec(
         name=name,
         backends=(BackendSpec("cave", "stack"),),
@@ -75,6 +88,7 @@ def _spec(name, caps, source):
         segmentation_source=source,
         capabilities=frozenset(caps),
         example_ids=(1,),
+        **extra,
     )
 
 
@@ -294,3 +308,28 @@ def test_agglomerate_is_only_sent_to_graphene(_stub_volumes):
     volume.segmentation_cutout(ds, [[0, 0, 0], [16, 16, 16]], source=GRAPHENE)
     _, _, opts = _stub_volumes[GRAPHENE].downloads[0]
     assert opts["agglomerate"] is True
+
+
+# ------------------------------------------------------------------ mesh detail level
+
+
+@pytest.mark.parametrize(
+    ("source", "mesh_lod", "call", "sent"),
+    [
+        # A dataset's preference is clamped: octree depth varies per object.
+        (FLAT, 1, {}, {"lod": 1, "clamp": True}),
+        # A named level is not - asking for one that does not exist should raise...
+        (FLAT, 1, {"lod": 3}, {"lod": 3}),
+        # ...unless the caller asks to fall back.
+        (FLAT, 0, {"lod": 2, "lod_fallback": True}, {"lod": 2, "clamp": True}),
+        # Level 0 is also the source's own default, so there is nothing to send.
+        (FLAT, 0, {}, {}),
+        # Graphene has no levels: never a preference, never a clamp.
+        (GRAPHENE, 1, {}, {}),
+        (GRAPHENE, 0, {"lod": 2, "lod_fallback": True}, {"lod": 2}),
+    ],
+)
+def test_what_level_of_detail_reaches_the_mesh_source(_stub_volumes, source, mesh_lod, call, sent):
+    ds = _DS(_spec("x", {Cap.SEGMENTATION, Cap.MESHES}, source, mesh_lod=mesh_lod))
+    list(volume.fetch_meshes(ds, [1], source=source, progress=False, **call))
+    assert volume.get_volume(ds, source).mesh.calls[0][1] == sent

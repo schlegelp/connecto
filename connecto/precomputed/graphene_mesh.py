@@ -176,6 +176,9 @@ class GrapheneMeshSource:
     behind its default.
     """
 
+    # The graph layer sets the resolution; `lod` only ends up in the manifest URL.
+    has_lods = False
+
     def __init__(
         self, meta: GrapheneMeta, session=None,
         parallel: int = DEFAULT_MESH_PARALLEL,

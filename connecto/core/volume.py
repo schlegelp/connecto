@@ -296,6 +296,7 @@ def fetch_meshes(
     *,
     source: str | None = None,
     lod=None,
+    lod_fallback: bool = False,
     progress: bool = True,
     max_workers: int = DEFAULT_MESH_WORKERS,
     parallel: int | None = None,
@@ -313,13 +314,24 @@ def fetch_meshes(
     bucket, which has only one read to make. ``None`` leaves each on its own default,
     and those differ by an order of magnitude for exactly that reason; see
     :mod:`connecto.precomputed.limits`.
+
+    ``lod=None`` means ``spec.mesh_lod``, always clamped; a level the caller named
+    is clamped only with ``lod_fallback=True``. See :meth:`Meshes.get
+    <connecto.core.namespaces.Meshes.get>` for why.
     """
     vol = get_volume(ds, source)
     ids = [int(i) for i in ids]
-    # Only pass `lod` when the caller meant one. Graphene meshes have no levels of
-    # detail - the graph layer sets the resolution - and the number would end up in
-    # the manifest URL, asking the service for something that does not exist.
-    kwargs = {} if lod is None else {"lod": int(lod)}
+
+    # A source without levels never gets a preference or a clamp. An explicit `lod`
+    # still goes through, so a caller who passed one there hears about it.
+    has_lods = vol.mesh.has_lods
+    if lod is None and has_lods and ds.spec.mesh_lod:
+        lod, lod_fallback = ds.spec.mesh_lod, True
+    kwargs = {}
+    if lod is not None:
+        kwargs["lod"] = int(lod)
+        if lod_fallback and has_lods:
+            kwargs["clamp"] = True
     if parallel is not None:
         kwargs["parallel"] = int(parallel)
 

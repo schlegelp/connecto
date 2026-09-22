@@ -166,6 +166,10 @@ def _to_model_space(vertices, manifest, lod, frag, quantization_bits):
 class MultiResMeshSource:
     """``neuroglancer_multilod_draco``, sharded or one file per object."""
 
+    # Whether `lod` means anything here. Callers ask the source rather than sniffing
+    # the URL, so a format that grows levels only has to say so in one place.
+    has_lods = True
+
     def __init__(self, store: Store, info: dict, parallel: int | None = None):
         self.store = store
         self.info = info
@@ -204,8 +208,16 @@ class MultiResMeshSource:
             return None, None, None
         return MultiResManifest.from_binary(raw), f"{int(segid)}", 0
 
-    def get(self, segid: int, lod: int = 0, parallel: int | None = None):
+    def get(
+        self, segid: int, lod: int = 0, parallel: int | None = None,
+        clamp: bool = False,
+    ):
         """One object's mesh, at one level of detail.
+
+        How deep the octree goes is a property of the *object*, not of the bucket:
+        the Janelia FlyEM volumes are uniformly four deep, but a small FlyWire v783
+        neuron has exactly one level where a large one has four. ``clamp`` pins
+        ``lod`` to the coarsest level the object has instead of raising.
 
         ``parallel`` buys something different here than on the other two sources. A
         whole LOD is one contiguous byte range, so there is exactly one request to
@@ -224,10 +236,14 @@ class MultiResMeshSource:
             lod = 0
         if lod < 0:
             lod += manifest.num_lods
-        if not 0 <= lod < manifest.num_lods:
+        if clamp:
+            lod = min(max(lod, 0), manifest.num_lods - 1)
+        elif not 0 <= lod < manifest.num_lods:
             raise ValueError(
                 f"Level of detail {lod} out of range for segment {segid}; "
-                f"{manifest.num_lods} available (0 is the finest)."
+                f"{manifest.num_lods} available (0 is the finest). How many levels "
+                f"an object has depends on its size, so a level that works for one "
+                f"segment need not exist for another."
             )
 
         per_lod = manifest.lod_byte_sizes()
@@ -271,6 +287,8 @@ class MultiResMeshSource:
 
 class LegacyMeshSource:
     """``neuroglancer_legacy_mesh``: a JSON manifest naming raw fragments."""
+
+    has_lods = False
 
     def __init__(
         self, store: Store, info: dict | None = None,

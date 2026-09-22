@@ -122,6 +122,8 @@ HEMIBRAIN = DatasetSpec(
     # this is belt and braces - but pinning it means we do not depend on the
     # server keeping that field populated.
     segmentation_source="precomputed://gs://neuroglancer-janelia-flyem-hemibrain/v1.2/segmentation",
+    # Level 0 is the raw marching-cubes surface: 36 million vertices for one DA1 lPN.
+    mesh_lod=1,
     # No `class` and no predicted transmitters in v1.2.1 - so they are simply
     # absent from the frame rather than present-and-empty.
     capabilities=_DVID_CAPS,
@@ -211,6 +213,7 @@ MALECNS = DatasetSpec(
     voxel_size=(8, 8, 8),
     template_space="JRCFIB2022Mraw",
     segmentation_source="precomputed://gs://flyem-male-cns/v1.0/segmentation",
+    mesh_lod=1,  # as hemibrain
     capabilities=_DVID_CAPS | {Cap.NT_PER_SYNAPSE},
     example_ids=(10001, 10002),
 )
@@ -304,6 +307,7 @@ MANC_SPEC = DatasetSpec(
     # mismatch - v1.2.3 is a database revision on the same segmentation - and the
     # T-bar check confirms it: MDN's synapses land in MDN.
     segmentation_source="precomputed://gs://manc-seg-v1p2/manc-seg-v1.2",
+    mesh_lod=1,  # as hemibrain
     capabilities=_DVID_CAPS | {Cap.NT_PER_SYNAPSE},
     example_ids=(13438, 13809),  # two MDNs (moonwalker descending neurons)
 )
@@ -332,6 +336,9 @@ FISH2 = DatasetSpec(
     ),
     # Note: no version suffix. Nothing in connecto may assume `name:vX.Y`.
     backends=(BackendSpec("neuprint", "neuprint-fish2.janelia.org/fish2"),),
+    # What fish2 has always returned. No published volume, so meshes come through
+    # navis - which cannot clamp, so this one is *not* clamped per object.
+    mesh_lod=1,
     annotation_sources=(_NP,),
     fields={
         "type": ("type", "proposedType", "connectivityType"),

@@ -130,6 +130,10 @@ detail when you do not need every vertex:
 fw.meshes.get(ids, lod=2)
 ```
 
+How many levels a neuron has depends on its size, so a level you name can be out of
+range for small neurons. `lod_fallback=True` gives those the coarsest level they do
+have instead of raising; `lod=-1` always means "the coarsest there is".
+
 ## Voxels
 
 A skeleton is a neuron's centreline and a mesh is its surface. `ds.voxels` gives you the

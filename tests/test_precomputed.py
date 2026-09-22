@@ -443,27 +443,85 @@ def test_a_truncated_mesh_manifest_is_rejected():
         mesh.MultiResManifest.from_binary(b"\x00" * 64)
 
 
-def test_a_mesh_manifest_round_trips():
+def _manifest_bytes(positions, sizes, grid_origin=(0, 0, 0)):
+    """A multi-resolution manifest; ``positions[lod]`` is ``(n, 3)``, ``sizes[lod]`` n."""
+    num_lods = len(sizes)
     header = (
-        np.array([32, 32, 32], dtype="<f4").tobytes()          # chunk_shape
-        + np.array([1, 2, 3], dtype="<f4").tobytes()           # grid_origin
-        + np.array([2], dtype="<u4").tobytes()                 # num_lods
-        + np.array([1, 2], dtype="<f4").tobytes()              # lod_scales
-        + np.array([[0, 0, 0], [0, 0, 0]], dtype="<f4").tobytes()   # vertex_offsets
-        + np.array([2, 1], dtype="<u4").tobytes()              # num_fragments_per_lod
+        np.array([32, 32, 32], dtype="<f4").tobytes()                  # chunk_shape
+        + np.array(grid_origin, dtype="<f4").tobytes()                 # grid_origin
+        + np.array([num_lods], dtype="<u4").tobytes()                  # num_lods
+        + np.array([2.0**i for i in range(num_lods)], dtype="<f4").tobytes()  # scales
+        + np.zeros((num_lods, 3), dtype="<f4").tobytes()               # vertex_offsets
+        + np.array([len(s) for s in sizes], dtype="<u4").tobytes()     # frags per lod
     )
-    body = (
-        np.array([0, 1, 0, 1, 0, 1], dtype="<u4").tobytes()    # lod 0 positions (F order)
-        + np.array([10, 20], dtype="<u4").tobytes()            # lod 0 sizes
-        + np.array([0, 0, 0], dtype="<u4").tobytes()           # lod 1 positions
-        + np.array([30], dtype="<u4").tobytes()                # lod 1 sizes
+    body = b"".join(
+        # Positions are stored as runs of x, y and z - hence order="F".
+        np.asarray(pos, dtype="<u4").tobytes(order="F")
+        + np.asarray(size, dtype="<u4").tobytes()
+        for pos, size in zip(positions, sizes)
     )
-    manifest = mesh.MultiResManifest.from_binary(header + body)
+    return header + body
+
+
+def test_a_mesh_manifest_round_trips():
+    manifest = mesh.MultiResManifest.from_binary(
+        _manifest_bytes(
+            positions=[[[0, 0, 0], [1, 1, 1]], [[0, 0, 0]]],
+            sizes=[[10, 20], [30]],
+            grid_origin=(1, 2, 3),
+        )
+    )
 
     assert manifest.num_lods == 2
     assert manifest.lod_byte_sizes() == [30, 30]
     assert list(manifest.grid_origin) == [1, 2, 3]
     assert manifest.fragment_positions[0].tolist() == [[0, 0, 0], [1, 1, 1]]
+
+
+# ------------------------------------------------------------------ level of detail
+
+
+def _shallow_mesh_source(monkeypatch, num_lods: int):
+    """A mesh source whose one object is ``num_lods`` deep, plus a list recording
+    which level `get` read. Stubbed at the decoder: what is under test is the level
+    arithmetic, not draco."""
+    manifest = _manifest_bytes([[[0, 0, 0]]] * num_lods, [[4]] * num_lods)
+    # Each level's four bytes say which level they are.
+    fragments = b"".join(bytes([i]) * 4 for i in range(num_lods))
+    source = mesh.MultiResMeshSource(
+        _FakeStore({"7.index": manifest, "7": fragments}), {}, parallel=1
+    )
+
+    read: list = []
+
+    def fake_decode(binary):
+        read.append(binary[0])
+        return np.zeros((3, 3)), np.zeros((1, 3), dtype="int64")
+
+    monkeypatch.setattr(mesh, "_decode_draco", fake_decode)
+    return source, read
+
+
+@pytest.mark.parametrize(
+    ("num_lods", "lod", "expected"),
+    [
+        (1, 1, 0),   # a small FlyWire neuron: settle for the only level there is
+        (4, 1, 1),   # a level that exists does not move
+        (1, -2, 0),  # an underflowing negative level would otherwise index backwards
+    ],
+)
+def test_a_clamped_level_of_detail_settles_for_what_the_object_has(
+    monkeypatch, num_lods, lod, expected
+):
+    source, read = _shallow_mesh_source(monkeypatch, num_lods)
+    source.get(7, lod=lod, clamp=True)
+    assert read == [expected]
+
+
+def test_an_unclamped_level_of_detail_that_does_not_exist_raises(monkeypatch):
+    source, _ = _shallow_mesh_source(monkeypatch, num_lods=1)
+    with pytest.raises(ValueError, match="out of range"):
+        source.get(7, lod=3)
 
 
 # ------------------------------------------------------------------------ graphene

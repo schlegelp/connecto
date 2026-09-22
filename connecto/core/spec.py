@@ -504,6 +504,12 @@ class DatasetSpec:
     template_space: str | None = None
     segmentation_source: str | None = None
 
+    # Which level of the mesh octree `meshes.get()` hands back when the caller names
+    # none, clamped per object; 0 is the full-resolution surface. A *dataset*
+    # property rather than a backend one because it belongs to the mesh bucket, and
+    # FlyWire's two doors read the same bucket - they must not disagree about it.
+    mesh_lod: int = 0
+
     # Precomputed neuroglancer skeletons, if the dataset publishes them. May contain
     # "{version}" - FlyWire ships one bucket per materialization.
     #
